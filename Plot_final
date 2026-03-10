@@ -101,5 +101,18 @@ scatter3(points_BF_aligned(:,1), points_BF_aligned(:,2), points_BF_aligned(:,3),
 
 xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('Z (mm)');
 title('Pontos Alinhados: CT Landmarks (Red) vs BF Alinhado (Blue)');
-legend('Anatomical Landmarks', 'BF Transformed');
+legend('Anatomical Landmarks', 'BF Transformed', 'Location', 'best');
+
+% --- ADIÇÃO DAS LEGENDAS NOS PONTOS ---
+labels = {'GC','HHC','LE','ME'};
+
+% Legendas para os pontos Anatómicos (Vermelho)
+text(points_A(:,1), points_A(:,2), points_A(:,3), labels, 'FontSize', 10, 'FontWeight', 'bold', 'Color', 'r', 'VerticalAlignment', 'bottom');
+
+% Legendas para os pontos BF alinhados (Azul)
+% Nota: Adicionei um pequeno "desvio" (offset) no eixo Z (+5mm) para o texto azul 
+% não ficar sobreposto ao vermelho, já que os pontos estão quase no mesmo sítio agora!
+offset = 5; 
+text(points_BF_aligned(:,1), points_BF_aligned(:,2), points_BF_aligned(:,3) + offset, labels, 'FontSize', 10, 'FontWeight', 'bold', 'Color', 'b', 'VerticalAlignment', 'top');
+
 view(3);
