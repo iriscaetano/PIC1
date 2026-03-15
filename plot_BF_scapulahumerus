@@ -1,1 +1,61 @@
+clear all; close all; clc;
 
+% Ficheiros
+file_static = 'O45_001_F_47_R_static_t02_output.xlsx';
+
+% -------- 1. COORDENADAS BF (static) --------
+TS_BF = readmatrix(file_static, 'Sheet','scapula','Range','D94:F94');
+IA_BF = readmatrix(file_static, 'Sheet','scapula','Range','G94:I94');
+PLA_BF = readmatrix(file_static, 'Sheet','scapula','Range','J94:L94');
+AC_BF = readmatrix(file_static, 'Sheet','scapula','Range','M94:O94');
+LE_BF  = readmatrix(file_static,'Sheet','humerus','Range','S94:U94');
+ME_BF  = readmatrix(file_static,'Sheet','humerus','Range','V94:X94');
+
+points_BF = [TS_BF; IA_BF; PLA_BF; AC_BF; LE_BF; ME_BF];
+
+TS_vicon = readmatrix(file_static, 'Sheet','vicon','Range','P94:R94');
+IA_vicon = readmatrix(file_static, 'Sheet','vicon','Range','S94:U94');
+PLA_vicon = readmatrix(file_static, 'Sheet','vicon','Range','J94:L94');
+AC_vicon = readmatrix(file_static, 'Sheet','vicon','Range','G94:I94');
+LE_vicon = readmatrix(file_static,'Sheet','vicon','Range','BC94:BE94');
+ME_vicon = readmatrix(file_static,'Sheet','vicon','Range','BF94:BH94');
+
+points_vicon = [TS_vicon; IA_vicon; PLA_vicon; AC_vicon; LE_vicon; ME_vicon];
+
+% -------- 3. PLOT 3D (NÃO ALINHADO) --------
+figure('Color','w');
+hold on; grid on; axis equal;
+
+% Scatter dos pontos
+scatter3(points_BF(:,1), points_BF(:,2), points_BF(:,3),100,'b','filled')
+scatter3(points_vicon(:,1), points_vicon(:,2), points_vicon(:,3),100,'r','filled')
+
+% ---- LINHAS SCAPULA BF ----
+scap_idx = [1 3 4 2 1]; % TS -> PLA -> AC -> IA -> TS
+plot3(points_BF(scap_idx,1), points_BF(scap_idx,2), points_BF(scap_idx,3),'b-','LineWidth',2)
+
+% ---- LINHAS SCAPULA VICON ----
+plot3(points_vicon(scap_idx,1), points_vicon(scap_idx,2), points_vicon(scap_idx,3),'r-','LineWidth',2)
+
+% ---- LINHA HUMERUS BF ----
+plot3(points_BF(5:6,1), points_BF(5:6,2), points_BF(5:6,3),'b--','LineWidth',2)
+
+% ---- LINHA HUMERUS VICON ----
+plot3(points_vicon(5:6,1), points_vicon(5:6,2), points_vicon(5:6,3),'r--','LineWidth',2)
+
+% Labels
+labels = {'TS','IA','PLA','AC','LE','ME'};
+
+text(points_BF(:,1),points_BF(:,2),points_BF(:,3),labels,...
+    'Color','b','FontWeight','bold')
+
+text(points_vicon(:,1),points_vicon(:,2),points_vicon(:,3),labels,...
+    'Color','r','FontWeight','bold')
+
+xlabel('X (mm)')
+ylabel('Y (mm)')
+zlabel('Z (mm)')
+
+title('Comparação BF vs Vicon')
+legend({'BF Points','Vicon Points'},'Location','northeast')
+view(3)
