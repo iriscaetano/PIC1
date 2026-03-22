@@ -1,0 +1,22 @@
+% Pontos 3D medidos (ex: em mm)
+AC = [xAC, yAC, zAC];
+TS = [xTS, yTS, zTS];
+AI = [xAI, yAI, zAI];
+
+% Eixo x: AC -> TS
+x = (TS - AC) / norm(TS - AC);
+
+% Vetores para o plano AC-TS-AI
+v1 = TS - AC;
+v2 = AI - AC;
+
+% Eixo z: perpendicular ao plano, apontando para trás
+z = cross(v1, v2);
+z = z / norm(z);
+
+% Eixo y: perpendicular a x e z (sistema right-handed)
+y = cross(z, x);
+y = y / norm(y);
+
+% Matriz de rotação (colunas = eixos)
+A = [x(:), y(:), z(:)];
