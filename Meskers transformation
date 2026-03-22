@@ -1,22 +1,21 @@
-% Pontos 3D medidos (ex: em mm)
+% matriz valores
 AC = [xAC, yAC, zAC];
 TS = [xTS, yTS, zTS];
 AI = [xAI, yAI, zAI];
 
-% Eixo x: AC -> TS
-x = (TS - AC) / norm(TS - AC);
+% sistema de coordenadas Meskers
+x_axis = (TS - AC) / norm(TS - AC);
+v1 = TS - AC; v2 = AI - AC;
+z_axis = cross(v1, v2); z_axis = z_axis / norm(z_axis);
+y_axis = cross(z_axis, x_axis); y_axis = y_axis / norm(y_axis);
+A = [x_axis(:), y_axis(:), z_axis(:)];
 
-% Vetores para o plano AC-TS-AI
-v1 = TS - AC;
-v2 = AI - AC;
+% transformação de sistema
+PC_local = A' * (PC_global - AC)';   
+AI_local = A' * (AI_global - AC)';
+L_local  = A' * (L_global  - AC)';
 
-% Eixo z: perpendicular ao plano, apontando para trás
-z = cross(v1, v2);
-z = z / norm(z);
-
-% Eixo y: perpendicular a x e z (sistema right-handed)
-y = cross(z, x);
-y = y / norm(y);
-
-% Matriz de rotação (colunas = eixos)
-A = [x(:), y(:), z(:)];
+% regressão Meskers
+x = 18.9743 + 0.2992*PC_local(1) + 0.2341*AI_local(1) + 0.1590*L_local(1);
+y = -13.8791 - 0.2208*PC_local(1) + 0.1205*AI_local(1) - 0.1002*L_local(1);
+z = 9.2629 + 0.7852*PC_local(1) + 0.1720*L_local(1);
