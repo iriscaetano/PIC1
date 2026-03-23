@@ -1,21 +1,53 @@
-% matriz valores
-AC = [xAC, yAC, zAC];
-TS = [xTS, yTS, zTS];
-AI = [xAI, yAI, zAI];
+% -------- FICHEIRO --------
+file_static = 'O45_001_F_47_R_static_t02_output.xlsx';
 
-% sistema de coordenadas Meskers
+% -------- GROUND TRUTH (HHC) --------
+HHC_frames = readmatrix(file_static, 'Sheet','humerus','Range','P2:R92');
+HHC = mean(HHC_frames, 1);
+
+% -------- LANDMARKS (Vicon) --------
+AC = mean(readmatrix(file_static,'Sheet','vicon','Range','G2:I92'),1);
+TS = mean(readmatrix(file_static,'Sheet','vicon','Range','P2:R92'),1);
+AI = mean(readmatrix(file_static,'Sheet','vicon','Range','S2:U92'),1);
+
+PC_global = mean(readmatrix(file_static,'Sheet','vicon','Range','AE2:AG92'),1);;
+TS_global  = TS
+
+% -------- SISTEMA DE COORDENADAS (Meskers) --------
 x_axis = (TS - AC) / norm(TS - AC);
-v1 = TS - AC; v2 = AI - AC;
-z_axis = cross(v1, v2); z_axis = z_axis / norm(z_axis);
-y_axis = cross(z_axis, x_axis); y_axis = y_axis / norm(y_axis);
+v1 = TS - AC; 
+v2 = AI - AC;
+
+z_axis = cross(v1, v2); 
+z_axis = z_axis / norm(z_axis);
+
+y_axis = cross(z_axis, x_axis); 
+y_axis = y_axis / norm(y_axis);
+
 A = [x_axis(:), y_axis(:), z_axis(:)];
 
-% transformação de sistema
-PC_local = A' * (PC_global - AC)';   
-AI_local = A' * (AI_global - AC)';
-L_local  = A' * (L_global  - AC)';
+% -------- TRANSFORMAÇÃO --------
+PC_local = A' * (PC_global - AC)';
+AI_local = A' * (AI - AC)';        % AI já estava definido
+TS_local  = A' * (TS_global - AC)';
 
-% regressão Meskers
-x = 18.9743 + 0.2992*PC_local(1) + 0.2341*AI_local(1) + 0.1590*L_local(1);
-y = -13.8791 - 0.2208*PC_local(1) + 0.1205*AI_local(1) - 0.1002*L_local(1);
-z = 9.2629 + 0.7852*PC_local(1) + 0.1720*L_local(1);
+% -------- REGRESSÃO (Meskers) --------
+GHx = 18.9743 + 0.2992*PC_local(1) + 0.2341*AI_local(1) + 0.1590*TS_local(1);
+GHy = -13.8791 - 0.2208*PC_local(1) + 0.1205*AI_local(1) - 0.1002*TS_local(1);
+GHz = 9.2629 + 0.7852*PC_local(1) + 0.1720*TS_local(1);
+
+GH_calc = [GHx GHy GHz];
+
+% -------- ERRO --------
+erro = norm(GH_calc - HHC);
+
+% -------- OUTPUT --------
+disp('GH calculado (Meskers):')
+disp(GH_calc)
+
+disp('HHC (ground truth):')
+disp(HHC)
+
+disp('Erro euclidiano:')
+disp(erro)
+
