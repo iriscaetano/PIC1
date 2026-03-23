@@ -30,12 +30,12 @@ A = [x_axis(:), y_axis(:), z_axis(:)];
 PC_local = A' * (PC - AC)';
 AI_local = A' * (AI - AC)';        
 TS_local  = A' * (TS - AC)';
-AA_local  = A' * (AA - AC)'
+AA_local  = A' * (AA - AC)';
 
 % -------- REGRESSÃO (Meskers) --------
 GHx = 18.9743 + 0.2434*PC_local(1) + 0.2341*AI_local(1) + 0.0558*PC_local(2) + 0.1590*(norm(AI_local-AA_local));
-GHy = -3.8791 + 0.1732*PC_local(2) + 0.1205*AI_local(1) - 0.1002*(norm(AC_local-PC_local)) - 0.3940*(norm(AC_local-AA_local));
-GHz = 9.2629 + 0.1255*PC_local(3) - 0.2403PC(2) + 0.1720*TS_local(1) + 0.1720 (norm(TS_local-PC_local));
+GHy = -3.8791 + 0.1732*PC_local(2) + 0.1205*AI_local(1) - 0.1002*(norm(AC-PC_local)) - 0.3940*(norm(AC-AA_local));
+GHz = 9.2629 + 0.1255*PC_local(3) - 0.2403*PC(2) + 0.1720*TS_local(1) + 0.1720 (norm(TS_local-PC_local));
 
 GH_calc = [GHx GHy GHz];
 
