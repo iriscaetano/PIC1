@@ -9,9 +9,9 @@ HHC = mean(HHC_frames, 1);
 AC = mean(readmatrix(file_static,'Sheet','vicon','Range','G2:I92'),1);
 TS = mean(readmatrix(file_static,'Sheet','vicon','Range','P2:R92'),1);
 AI = mean(readmatrix(file_static,'Sheet','vicon','Range','S2:U92'),1);
+AA = mean(readmatrix(file_static,'Sheet','vicon','Range','M2:O92'),1);
 
-PC_global = mean(readmatrix(file_static,'Sheet','vicon','Range','AE2:AG92'),1);;
-TS_global  = TS
+PC = mean(readmatrix(file_static,'Sheet','vicon','Range','AE2:AG92'),1);;
 
 % -------- SISTEMA DE COORDENADAS (Meskers) --------
 x_axis = (TS - AC) / norm(TS - AC);
@@ -27,14 +27,15 @@ y_axis = y_axis / norm(y_axis);
 A = [x_axis(:), y_axis(:), z_axis(:)];
 
 % -------- TRANSFORMAÇÃO --------
-PC_local = A' * (PC_global - AC)';
-AI_local = A' * (AI - AC)';        % AI já estava definido
-TS_local  = A' * (TS_global - AC)';
+PC_local = A' * (PC - AC)';
+AI_local = A' * (AI - AC)';        
+TS_local  = A' * (TS - AC)';
+AA_local  = A' * (AA - AC)'
 
 % -------- REGRESSÃO (Meskers) --------
-GHx = 18.9743 + 0.2992*PC_local(1) + 0.2341*AI_local(1) + 0.1590*TS_local(1);
-GHy = -13.8791 - 0.2208*PC_local(1) + 0.1205*AI_local(1) - 0.1002*TS_local(1);
-GHz = 9.2629 + 0.7852*PC_local(1) + 0.1720*TS_local(1);
+GHx = 18.9743 + 0.2434*PC_local(1) + 0.2341*AI_local(1) + 0.0558*PC_local(2) + 0.1590*(norm(AI_local-AA_local));
+GHy = -3.8791 + 0.1732*PC_local(2) + 0.1205*AI_local(1) - 0.1002*(norm(AC_local-PC_local)) - 0.3940*(norm(AC_local-AA_local));
+GHz = 9.2629 + 0.1255*PC_local(3) - 0.2403PC(2) + 0.1720*TS_local(1) + 0.1720 (norm(TS_local-PC_local));
 
 GH_calc = [GHx GHy GHz];
 
