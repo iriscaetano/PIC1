@@ -11,7 +11,7 @@ TS = mean(readmatrix(file_static,'Sheet','vicon','Range','P2:R92'),1);
 AI = mean(readmatrix(file_static,'Sheet','vicon','Range','S2:U92'),1);
 AA = mean(readmatrix(file_static,'Sheet','vicon','Range','M2:O92'),1);
 
-PC = mean(readmatrix(file_static,'Sheet','vicon','Range','AE2:AG92'),1);;
+% PC = mean(readmatrix(file_static,'Sheet','vicon','Range','AE2:AG92'),1);;
 
 % -------- SISTEMA DE COORDENADAS (Meskers) --------
 x_axis = (TS - AC) / norm(TS - AC);
@@ -27,7 +27,8 @@ y_axis = y_axis / norm(y_axis);
 A = [x_axis(:), y_axis(:), z_axis(:)];
 
 % -------- TRANSFORMAÇÃO --------
-PC_local = A' * (PC - AC)';
+% PC_local = A' * (PC - AC)';
+PC_local = [0 0 0] ;
 AI_local = A' * (AI - AC)';        
 TS_local  = A' * (TS - AC)';
 AA_local  = A' * (AA - AC)';
