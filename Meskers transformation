@@ -44,6 +44,9 @@ GH_calc = [GHx GHy GHz];
 erro = norm(GH_calc - HHC);
 
 % -------- OUTPUT --------
+disp('Matriz Rotação (Meskers):')
+disp(A)
+
 disp('GH calculado (Meskers):')
 disp(GH_calc)
 
