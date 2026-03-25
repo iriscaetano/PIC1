@@ -1,0 +1,80 @@
+%% Estimativa GH vs Ground Truth (HHC Vicon) - Processamento Automático
+clear; clc;
+
+filename = 'O45_001_F_47_R_static_t02_output.xlsx';
+
+%% 1) EXTRAÇÃO DE DADOS BIOMÉTRICOS (Sheet1)
+data_demo = readcell(filename, 'Sheet', 'Sheet1');
+getDemo = @(lab) data_demo{find(strcmpi(data_demo(:,1), lab)), 2};
+
+A_years = getDemo('Age');
+sex_str = getDemo('Sex');
+H_m     = getDemo('Height') / 100; % cm -> m
+W_kg    = getDemo('Weight');
+S = 0; if strcmpi(sex_str, 'M'), S = 1; end
+
+%% 2) AQUISIÇÃO DE MARCOS DA ESCÁPULA (Aba Vicon)
+raw_vicon = readtable(filename, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
+h_v = raw_vicon.Properties.VariableNames;
+f_idx = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+
+% Extração e Média (Frames 1-92)
+getMeanG = @(label) mean(table2array(raw_vicon(:, f_idx(label):f_idx(label)+2)), 1, 'omitnan')';
+
+AA_g = getMeanG('Right posterolateral acromion');
+TS_g = getMeanG('Right trigonum');
+AI_g = getMeanG('Right inferior angle');
+AC_g = getMeanG('Right AC');
+
+%% 3) SISTEMA LOCAL DA ESCÁPULA (ISB 2005)
+origin = AA_g; % Origem no AA [cite: 228]
+ez = (AA_g - TS_g) / norm(AA_g - TS_g); % Eixo Z (Espinha) [cite: 230]
+v1 = AI_g - AA_g; v2 = TS_g - AA_g;
+ex = cross(v1, v2); ex = ex / norm(ex); % Eixo X (Anterior) [cite: 233]
+ey = cross(ez, ex); ey = ey / norm(ey); % Eixo Y (Superior) [cite: 235]
+R_scap = [ex ey ez];
+
+%% 4) VARIÁVEIS DE REGRESSÃO E CÁLCULO GH
+AC_loc = R_scap' * (AC_g - origin);
+AI_loc = R_scap' * (AI_g - origin);
+ACx = AC_loc(1); ACy = AC_loc(2); ACz = AC_loc(3); AIz = AI_loc(3);
+
+L = @(p1, p2) norm(p1 - p2); % Função distância
+L_AA_TS = L(AA_g, TS_g); L_AA_AI = L(AA_g, AI_g); L_AA_AC = L(AA_g, AC_g);
+L_TS_AI = L(TS_g, AI_g); L_TS_AC = L(TS_g, AC_g); L_AI_AC = L(AI_g, AC_g);
+
+% Fórmulas de Regressão
+GHx = 25.5316 + 0.6334*ACx + 0.7842*ACy - 0.0832*AIz - 0.2673*L_AA_TS + ...
+      0.0365*L_AA_AI - 0.5353*L_AA_AC + 0.0843*L_TS_AI + 0.2350*L_TS_AC - ...
+      0.1246*L_AI_AC - 0.0237*A_years + 2.1296*S - 1.1900*H_m + 0.0221*W_kg;
+
+GHy = -6.7070 - 0.2514*ACx + 0.7558*ACy + 0.0264*AIz - 0.0620*L_AA_AI - ...
+      1.7641*S - 5.7094*H_m;
+
+GHz = -22.5233 + 0.5954*ACx + 0.0600*ACy + 0.1085*AIz + 0.3983*ACz - ...
+      0.3880*L_AA_AC - 0.0197*L_TS_AI - 0.0934*L_TS_AC + 0.0558*A_years + ...
+      0.2930*S + 26.4715*H_m - 0.0361*W_kg;
+
+GH_local = [GHx; GHy; GHz];
+GH_global = origin + R_scap * GH_local; % Estimativa final
+
+%% 5) GROUND TRUTH: AQUISIÇÃO DO HHC (Aba Humerus)
+raw_hum = readtable(filename, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
+h_h = raw_hum.Properties.VariableNames;
+hhc_idx = find(contains(h_h, 'HHC'), 1);
+
+% Média do HHC medido pelo Vicon
+HHC_gt_global = mean(table2array(raw_hum(:, hhc_idx:hhc_idx+2)), 1, 'omitnan')';
+
+%% 6) CÁLCULO DO ERRO EUCLIDIANO
+erro_3d = norm(GH_global - HHC_gt_global);
+
+%% 7) RELATÓRIO DE RESULTADOS
+fprintf('');
+fprintf('Ficheiro: %s\n', filename);
+fprintf('');
+fprintf('Estimativa (Regressão): [%.3f, %.3f, %.3f] mm\n', GH_global);
+fprintf('Ground Thruth (Vicon):  [%.3f, %.3f, %.3f] mm\n', HHC_gt_global);
+fprintf('');
+fprintf('Erro euclidiano: %.4f mm\n', erro_3d);
+fprintf('');
