@@ -1,0 +1,109 @@
+%% Automação Global: Estimativa GH e Validação (Padrão ISB 2005)
+clear; clc;
+
+% 1. IDENTIFICAR OS FICHEIROS
+arquivos = dir('*.xlsx'); 
+% Remove ficheiros temporários do Excel que começam com ~$
+arquivos = arquivos(~startsWith({arquivos.name}, '~$'));
+num_sujeitos = length(arquivos);
+
+if num_sujeitos == 0
+    error('Erro: Nenhum ficheiro .xlsx encontrado na pasta atual. Verifique a "Current Folder".');
+end
+
+% Tabela mestre para guardar tudo
+resultados_finais = table();
+
+fprintf('Iniciando processamento de %d sujeitos...\n\n', num_sujeitos);
+
+for i = 1:num_sujeitos
+    nome_f = arquivos(i).name;
+    fprintf('A processar [%d/%d]: %s... ', i, num_sujeitos, nome_f);
+    
+    try
+        %% 2. DADOS BIOMÉTRICOS (Sheet1)
+        data_demo = readcell(nome_f, 'Sheet', 'Sheet1');
+        getD = @(lab) data_demo{find(strcmpi(data_demo(:,1), lab), 1), 2};
+        
+        A_years = getD('Age');
+        sex_str = getD('Sex');
+        H_m     = getD('Height') / 100; % cm -> m
+        W_kg    = getD('Weight');
+        S = 0; if strcmpi(sex_str, 'M'), S = 1; end
+
+        %% 3. MARCOS ESCÁPULA (vicon) - BUSCA ROBUSTA
+        raw_vicon = readtable(nome_f, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
+        h_v = raw_vicon.Properties.VariableNames;
+        % Localiza colunas por nome (parcial) para evitar erro de nomes alterados pelo MATLAB
+        f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+        
+        % Média das frames (Ground Truth estático)
+        extractMean = @(label) mean(table2array(raw_vicon(:, f_i(label):f_i(label)+2)), 1, 'omitnan')';
+
+        AA_g = extractMean('posterolateral acromion');
+        TS_g = extractMean('trigonum');
+        AI_g = extractMean('inferior angle');
+        AC_g = extractMean('Right AC');
+
+        %% 4. SISTEMA LOCAL ISB (Wu et al. 2005)
+        % Definições recomendadas pela ISB[cite: 51, 227]:
+        origin = AA_g; % Origem no Angulus Acromialis (AA) [cite: 228]
+        % Eixo Zs: linha de TS para AA, apontando para AA [cite: 230]
+        ez = (AA_g - TS_g) / norm(AA_g - TS_g); 
+        % Eixo Xs: perpendicular ao plano AI-AA-TS (aponta para frente) [cite: 233]
+        v1 = AI_g - AA_g; v2 = TS_g - AA_g;
+        ex = cross(v1, v2); ex = ex / norm(ex); 
+        % Eixo Ys: perpendicular a Xs e Zs (aponta para cima) [cite: 235]
+        ey = cross(ez, ex); ey = ey / norm(ey); 
+        
+        R_scap = [ex ey ez];
+
+        %% 5. VARIÁVEIS LOCAIS E REGRESSÃO
+        AC_loc = R_scap' * (AC_g - origin);
+        AI_loc = R_scap' * (AI_g - origin);
+        ACx = AC_loc(1); ACy = AC_loc(2); ACz = AC_loc(3); AIz = AI_loc(3);
+        
+        dist = @(p1, p2) norm(p1 - p2);
+        L_AA_TS = dist(AA_g, TS_g); L_AA_AI = dist(AA_g, AI_g); L_AA_AC = dist(AA_g, AC_g);
+        L_TS_AI = dist(TS_g, AI_g); L_TS_AC = dist(TS_g, AC_g); L_AI_AC = dist(AI_g, AC_g);
+
+        % Equações de Regressão fornecidas
+        GHx = 25.5316 + 0.6334*ACx + 0.7842*ACy - 0.0832*AIz - 0.2673*L_AA_TS + ...
+              0.0365*L_AA_AI - 0.5353*L_AA_AC + 0.0843*L_TS_AI + 0.2350*L_TS_AC - ...
+              0.1246*L_AI_AC - 0.0237*A_years + 2.1296*S - 1.1900*H_m + 0.0221*W_kg;
+        GHy = -6.7070 - 0.2514*ACx + 0.7558*ACy + 0.0264*AIz - 0.0620*L_AA_AI - 1.7641*S - 5.7094*H_m;
+        GHz = -22.5233 + 0.5954*ACx + 0.0600*ACy + 0.1085*AIz + 0.3983*ACz - ...
+              0.3880*L_AA_AC - 0.0197*L_TS_AI - 0.0934*L_TS_AC + 0.0558*A_years + 0.2930*S + 26.4715*H_m - 0.0361*W_kg;
+
+        GH_est_global = origin + R_scap * [GHx; GHy; GHz];
+
+        %% 6. GROUND TRUTH (humerus)
+        raw_hum = readtable(nome_f, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
+        idx_hhc = find(contains(raw_hum.Properties.VariableNames, 'HHC'), 1);
+        HHC_gt = mean(table2array(raw_hum(:, idx_hhc:idx_hhc+2)), 1, 'omitnan')';
+
+        % Cálculo do Erro Euclidiano
+        erro_3d = norm(GH_est_global - HHC_gt);
+
+        %% 7. ADICIONAR À TABELA RESUMO
+        nova_linha = table({nome_f}, {sex_str}, A_years, H_m, W_kg, erro_3d, ...
+            'VariableNames', {'Ficheiro', 'Sexo', 'Idade', 'Altura_m', 'Peso_kg', 'Erro_Euclidiano_mm'});
+        resultados_finais = [resultados_finais; nova_linha];
+        
+        fprintf('OK! Erro: %.2f mm\n', erro_3d);
+
+    catch ME
+        fprintf('FALHOU! Erro: %s\n', ME.message);
+    end
+end
+
+% 8. GUARDAR EXCEL FINAL
+if ~isempty(resultados_finais)
+    writetable(resultados_finais, 'Relatorio_Final_20_Individuos.xlsx');
+    fprintf('\nFicheiro "Relatorio_Final_20_Individuos.xlsx" criado com sucesso!\n');
+    
+    % Estatísticas Rápidas no ecrã
+    fprintf('Erro Médio da Amostra: %.2f mm\n', mean(resultados_finais.Erro_Euclidiano_mm));
+else
+    fprintf('\nA tabela ficou vazia. Verifique se os ficheiros Excel estão na pasta correta.\n');
+end
