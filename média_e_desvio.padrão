@@ -1,0 +1,53 @@
+%% Caminho
+file_static = 'C:\Users\eduar\OneDrive\Imagens\Documentos\MATLAB\database_1.2\Kinematic_output_database_(BF_coordinate_system)\O45_001_F_47_R\O45_001_F_47_R_static_t02_output.xlsx';
+
+sheets = sheetnames(file_static);
+results = struct();
+
+for s = 2:length(sheets)
+    sheet_name = sheets{s};
+    fprintf('Processando sheet: %s\n', sheet_name);
+
+    % Ler tabela
+    T = readtable(file_static, 'Sheet', sheet_name, ...
+                  'VariableNamingRule','preserve');
+
+    varNames = T.Properties.VariableNames;
+    data = double(T{:,:});   % todos os dados
+
+    sheet_results = struct();
+
+    % Loop de 3 em 3 colunas (X,Y,Z)
+    for c = 1:3:size(data,2)
+
+        % Nome do landmark (remover _x)
+        name_full = varNames{c};
+        lm_name = erase(name_full, "_x");
+        lm_name = char(lm_name);
+
+        % Extrair X,Y,Z
+        coords = data(:, c:c+2);
+
+        % Remover NaNs
+        valid_idx = all(~isnan(coords),2);
+        coords = coords(valid_idx,:);
+
+        % Média e std
+        mean_val = mean(coords,1);
+        std_val  = std(coords,0,1);
+
+        % Guardar
+        field_name = matlab.lang.makeValidName(lm_name);
+        sheet_results.(field_name).mean = mean_val;
+        sheet_results.(field_name).std  = std_val;
+
+        % Print
+        fprintf('Landmark: %s\n', lm_name);
+        fprintf('Mean: [%f %f %f]\n', mean_val);
+        fprintf('Std:  [%f %f %f]\n\n', std_val);
+    end
+
+    results.(sheet_name) = sheet_results;
+end
+
+fprintf('Todos os landmarks processados!\n');
