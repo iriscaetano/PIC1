@@ -1,0 +1,76 @@
+clear all; close all; clc;
+
+% -------- 1. FICHEIRO & GROUND TRUTH --------
+file_static = 'O45_001_F_47_R_static_t02_output.xlsx';
+HHC_frames = readmatrix(file_static, 'Sheet','humerus','Range','P2:R92');
+HHC_global = mean(HHC_frames, 1);
+
+% -------- 2. DADOS VICON (Globais) --------
+AC_v = mean(readmatrix(file_static,'Sheet','vicon','Range','G2:I92'), 1);
+TS_v = mean(readmatrix(file_static,'Sheet','vicon','Range','P2:R92'), 1);
+AI_v = mean(readmatrix(file_static,'Sheet','vicon','Range','S2:U92'), 1);
+AA_v = mean(readmatrix(file_static,'Sheet','vicon','Range','J2:L92'), 1);
+
+% -------- 3. DADOS STL --------
+PrC_stl = [-81.515617, -154.688248, -103.455971];
+TS_stl  = [-9.836207, -57.513187, -103.920593];
+AI_stl  = [-21.438839, -40.408760, -210.376328];
+AC_stl  = [-96.899284, -129.680298, -75.063324];
+
+% --- 3.1 Construir Referencial Local do STL (Segundo Meskers 1998) ---
+% 1. X aponta para MEDIAL (de AC para TS)
+x_stl = (TS_stl - AC_stl) / norm(TS_stl - AC_stl); 
+
+% 2. Z aponta para TRÁS (Medial x Inferior = Posterior)
+v_temp_stl = AI_stl - AC_stl;
+z_stl = cross(x_stl, v_temp_stl);
+z_stl = z_stl / norm(z_stl);
+
+% 3. Y aponta para CIMA (CORRIGIDO: Medial x Posterior = Superior)
+y_stl = cross(x_stl, z_stl);
+y_stl = y_stl / norm(y_stl);
+
+A_stl = [x_stl(:), y_stl(:), z_stl(:)]; 
+
+% Identidade Local do PrC
+PrC_local = (A_stl' * (PrC_stl - AC_stl)')'; 
+
+% -------- 4. SISTEMA DE COORDENADAS VICON --------
+x_v = (TS_v - AC_v) / norm(TS_v - AC_v);
+
+v_temp_v = AI_v - AC_v;
+z_v = cross(x_v, v_temp_v);
+z_v = z_v / norm(z_v);
+
+% CORRIGIDO: Medial x Posterior = Superior
+y_v = cross(x_v, z_v);
+y_v = y_v / norm(y_v);
+
+A_vicon = [x_v(:), y_v(:), z_v(:)]; 
+
+AI_local = (A_vicon' * (AI_v - AC_v)')';        
+TS_local = (A_vicon' * (TS_v - AC_v)')';
+AA_local = (A_vicon' * (AA_v - AC_v)')';
+
+% -------- 5. REGRESSÃO (Meskers Tabela 2) --------
+GHx = 18.9743 + 0.2434*PrC_local(1) + 0.2341*AI_local(1) + 0.0558*PrC_local(2) + 0.1590*(norm(AI_local - AA_local));
+GHy = -3.8791 - 0.3940*(norm(AA_local)) + 0.1732*PrC_local(2) + 0.1205*AI_local(1) - 0.1002*(norm(PrC_local));
+GHz = 9.2629 + 1.0255*PrC_local(3) - 0.2403*PrC_local(2) + 0.1720*(norm(TS_local - PrC_local));
+
+GH_local = [GHx, GHy, GHz];
+
+% -------- 6. TRANSFORMAR GH DE VOLTA PARA GLOBAL (Vicon) --------
+GH_global = (A_vicon * GH_local')' + AC_v;
+
+% -------- 7. ERRO --------
+erro = norm(GH_global - HHC_global);
+
+% -------- 8. OUTPUT --------
+disp('--- RESULTADOS ---')
+disp('PrC em Coordenadas Locais:')
+disp(PrC_local)
+disp('GH calculado GLOBAL (Meskers):')
+disp(GH_global)
+disp('HHC (ground truth GLOBAL):')
+disp(HHC_global)
+fprintf('Erro euclidiano final: %.4f mm\n', erro);
