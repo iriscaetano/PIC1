@@ -1,0 +1,120 @@
+function resultados = calcular_GH_Rab()
+    clear; clc;
+    ficheiros = {
+        'O45_001_F_47_R_static_t02_output.xlsx'
+        'O45_002_M_52_R_static_t02_output.xlsx'
+        'O45_003_F_51_R_static_t01_output.xlsx'
+        'O45_004_M_50_R_static_t01_output.xlsx'
+        'O45_005_F_60_R_static_t01_output.xlsx'
+        'O45_006_M_61_R_static_t03_output.xlsx'
+        'O45_007_F_66_R_static_t03_output.xlsx'
+        'O45_008_M_66_R_static_t02_output.xlsx'
+        'O45_009_F_63_R_static_t02_output.xlsx'
+        'O45_010_M_62_R_static_t01_output.xlsx'
+        'U35_003_M_24_R_static_t01_output.xlsx'
+        'U35_004_M_33_R_static_t01_output.xlsx'
+        'U35_005_M_26_R_static_t01_output.xlsx'
+        'U35_006_F_27_R_static_t01_output.xlsx'
+        'U35_007_F_27_R_static_t02_output.xlsx'
+        'U35_008_F_22_R_static_t03_output.xlsx'
+        'U35_009_M_22_R_static_t01_output.xlsx'
+        'U35_010_M_27_R_static_t01_output.xlsx'
+    };
+    resultados = struct();
+    
+    for i = 1:length(ficheiros)
+        file_static = ficheiros{i};
+        
+        % --- Ground truth (HHC) ---
+        dados_humerus = readmatrix(file_static, 'Sheet','humerus');       
+        HHC_frames = dados_humerus(2:end, 16:18);                         
+        HHC_frames = HHC_frames(~all(isnan(HHC_frames),2),:);              
+        HHC = mean(HHC_frames, 1, 'omitnan');                               
+        
+        % --- Leitura Vicon ---
+        dados_vicon = readmatrix(file_static, 'Sheet','vicon');             
+        
+        % --- AC (direito) ---
+        AC_frames = dados_vicon(2:end, 7:9);                                
+        AC_frames = AC_frames(~all(isnan(AC_frames),2),:);                  
+        AC = mean(AC_frames, 1, 'omitnan'); 
+        
+        % --- left AC ---
+        leftAC_frames = dados_vicon(2:end, 25:27);                           
+        leftAC_frames = leftAC_frames(~all(isnan(leftAC_frames),2),:);      
+        leftAC = mean(leftAC_frames, 1, 'omitnan');
+        
+        % --- Marcadores da Escápula (AA, TS, AI) ---
+        % Leitura e cálculo da média para a calibração estática
+        AA_frames = dados_vicon(2:end, 10:12);
+        AA = mean(AA_frames(~all(isnan(AA_frames),2),:), 1, 'omitnan');
+        
+        TS_frames = dados_vicon(2:end, 16:18);
+        TS = mean(TS_frames(~all(isnan(TS_frames),2),:), 1, 'omitnan');
+        
+        AI_frames = dados_vicon(2:end, 19:21);
+        AI = mean(AI_frames(~all(isnan(AI_frames),2),:), 1, 'omitnan');
+        
+        % --- Distância entre os dois acrómios ---
+        D_AC = norm(AC - leftAC);
+        
+        % --- Cálculo GH (Rab) ---
+        GH_calc = [AC(1), AC(2) - 0.17 * D_AC, AC(3)];
+        
+        % --- Erro Global ---
+        erro = norm(GH_calc - HHC);
+        
+        % Desvio padrão do erro ao longo dos frames
+        erro_frames = sqrt(sum((HHC_frames - GH_calc).^2, 2));
+        erro_std = std(erro_frames, 'omitnan');
+        
+        % --- Sistema Local da Escápula (ISB) ---
+        % Garantir que os marcadores da escápula existem antes de calcular
+        if ~any(isnan(AA)) && ~any(isnan(TS)) && ~any(isnan(AI))
+            ez_s = (AA - TS) / norm(AA - TS); 
+            v1 = AI - AA; v2 = TS - AA;
+            ex_s = cross(v1, v2); ex_s = ex_s / norm(ex_s);
+            ey_s = cross(ez_s, ex_s); ey_s = ey_s / norm(ey_s);
+            
+            % Matriz de Rotação da Escápula
+            R_scap = [ex_s(:), ey_s(:), ez_s(:)]; 
+            
+            % Origem no Angulus Acromialis
+            Origem_Scap = AA;
+            
+            % Conversão para o referencial local (Matriz Transposta * Vetor Relativo)
+            GH_calc_local_scap = (R_scap' * (GH_calc - Origem_Scap)')';
+            HHC_local_scap = (R_scap' * (HHC - Origem_Scap)')';
+        else
+            % Se faltar algum marcador escapular na estática
+            GH_calc_local_scap = [NaN, NaN, NaN];
+            HHC_local_scap = [NaN, NaN, NaN];
+        end
+        
+        % --- Guardar resultados na struct ---
+        resultados(i).ficheiro = file_static;
+        resultados(i).GH_calc_Global = GH_calc;
+        resultados(i).HHC_Global = HHC;
+        resultados(i).GH_calc_LocalScap = GH_calc_local_scap; % Guardar local
+        resultados(i).HHC_LocalScap = HHC_local_scap;         % Guardar local
+        resultados(i).erro = erro;
+        resultados(i).erro_std = erro_std;
+        
+        % --- Output no ecrã ---
+        fprintf('Ficheiro: %s\n', file_static);
+        disp('GH Calculado (Global):')
+        disp(GH_calc)
+        disp('HHC Ground Truth (Global):')
+        disp(HHC)
+        disp('GH Calculado (Local Escápula):')
+        disp(GH_calc_local_scap)
+        disp('HHC Ground Truth (Local Escápula):')
+        disp(HHC_local_scap)
+        disp('Erro euclidiano:')
+        disp(erro)
+        disp('Desvio padrão do erro:')
+        disp(erro_std);
+    end
+end
+
+resultados_finais = calcular_GH_Rab();
