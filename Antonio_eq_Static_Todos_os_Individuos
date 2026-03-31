@@ -1,16 +1,17 @@
+% Estimativa GH com equação do António (Erro Euclidiano + Desvio Padrão)
 clear; clc;
 
+% Ficheiros a ser analisados, Têm de estar todos na mesma pasta juntamente
+% com o código
 arquivos = dir('*.xlsx'); 
-arquivos = arquivos(~startsWith({arquivos.name}, '~$'));
+arquivos = arquivos(~startsWith({arquivos.name}, '~$')); % Ignora temporários
 num_sujeitos = length(arquivos);
 
 if num_sujeitos == 0
     error('Erro: Nenhum ficheiro .xlsx encontrado na pasta atual.');
 end
 
-% Tabela mestre para guardar tudo
 resultados_finais = table();
-
 fprintf('Iniciando processamento de %d sujeitos...\n\n', num_sujeitos);
 
 for i = 1:num_sujeitos
@@ -18,47 +19,51 @@ for i = 1:num_sujeitos
     fprintf('A processar [%d/%d]: %s... ', i, num_sujeitos, nome_f);
     
     try
-        % dados biométricos (Sheet1)
+        % Aquisição dos dados biométricos de cada individuo
         data_demo = readcell(nome_f, 'Sheet', 'Sheet1');
         getD = @(lab) data_demo{find(strcmpi(data_demo(:,1), lab), 1), 2};
         
         A_years = getD('Age');
         sex_str = getD('Sex');
-        H_m     = getD('Height') / 100; % cm para m 
+        H_m     = getD('Height') / 100; % cm para m
         W_kg    = getD('Weight');
         S = 0; if strcmpi(sex_str, 'M'), S = 1; end
 
-        % Marcas da escápula no vicon
+        % Dados da Vicon
         raw_vicon = readtable(nome_f, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
         h_v = raw_vicon.Properties.VariableNames;
-        % Localiza colunas por nome para evitar erro de nomes alterados pelo MATLAB
         f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
         
-        % Média das frames (Ground Truth estático)
-        extractMean = @(label) mean(table2array(raw_vicon(:, f_i(label):f_i(label)+2)), 1, 'omitnan')';
-
-        AA_g = extractMean('posterolateral acromion');
-        TS_g = extractMean('trigonum');
-        AI_g = extractMean('inferior angle');
-        AC_g = extractMean('Right AC');
-
-        % 4. Sistema local de acordo com ISB
-      
-        origin = AA_g; % Origem no Angulus Acromialis (AA) 
-        % Eixo Z
-        ez = (AA_g - TS_g) / norm(AA_g - TS_g); 
-        % Eixo X
-        v1 = AI_g - AA_g; v2 = TS_g - AA_g;
-        ex = cross(v1, v2); ex = ex / norm(ex); 
-        % Eixo Y
-        ey = cross(ez, ex); ey = ey / norm(ey); 
+        AA_all = table2array(raw_vicon(:, f_i('posterolateral acromion') : f_i('posterolateral acromion')+2));
+        TS_all = table2array(raw_vicon(:, f_i('trigonum') : f_i('trigonum')+2));
+        AI_all = table2array(raw_vicon(:, f_i('inferior angle') : f_i('inferior angle')+2));
+        AC_all = table2array(raw_vicon(:, f_i('Right AC') : f_i('Right AC')+2));
         
-        R_scap = [ex ey ez]; % Matriz de Rotação
+        raw_hum = readtable(nome_f, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
+        idx_hhc = find(contains(raw_hum.Properties.VariableNames, 'HHC'), 1);
+        HHC_all = table2array(raw_hum(:, idx_hhc:idx_hhc+2));
 
-        % Variáveis Locais e regressão
-        AC_loc = R_scap' * (AC_g - origin);
+        % cálculo principal)
+        % Médias globais do ensaio estático
+        AA_g = mean(AA_all, 1, 'omitnan')'; 
+        TS_g = mean(TS_all, 1, 'omitnan')';
+        AI_g = mean(AI_all, 1, 'omitnan')'; 
+        AC_g = mean(AC_all, 1, 'omitnan')';
+        HHC_gt = mean(HHC_all, 1, 'omitnan')';
+
+        % Sistema Local Scapula (ISB)
+        origin = AA_g;
+        ez = (AA_g - TS_g) / norm(AA_g - TS_g);
+        v1 = AI_g - AA_g; v2 = TS_g - AA_g;
+        ex = cross(v1, v2);
+        ex = ex / norm(ex);
+        ey = cross(ez, ex); 
+        ey = ey / norm(ey);
+        R_scap = [ex ey ez];
+
+        % Variáveis e Regressão
+        AC_loc = R_scap' * (AC_g - origin); 
         AI_loc = R_scap' * (AI_g - origin);
-
         ACx = AC_loc(1); 
         ACy = AC_loc(2); 
         ACz = AC_loc(3); 
@@ -68,46 +73,64 @@ for i = 1:num_sujeitos
         L_AA_TS = dist(AA_g, TS_g); 
         L_AA_AI = dist(AA_g, AI_g);
         L_AA_AC = dist(AA_g, AC_g);
-        L_TS_AI = dist(TS_g, AI_g); 
+        L_TS_AI = dist(TS_g, AI_g);
         L_TS_AC = dist(TS_g, AC_g); 
         L_AI_AC = dist(AI_g, AC_g);
 
-        % Equações de Regressão do António
         GHx = 25.5316 + 0.6334*ACx + 0.7842*ACy - 0.0832*AIz - 0.2673*L_AA_TS + 0.0365*L_AA_AI - 0.5353*L_AA_AC + 0.0843*L_TS_AI + 0.2350*L_TS_AC - 0.1246*L_AI_AC - 0.0237*A_years + 2.1296*S - 1.1900*H_m + 0.0221*W_kg;
-
         GHy = -6.7070 - 0.2514*ACx + 0.7558*ACy + 0.0264*AIz - 0.0620*L_AA_AI - 1.7641*S - 5.7094*H_m;
-
         GHz = -22.5233 + 0.5954*ACx + 0.0600*ACy + 0.1085*AIz + 0.3983*ACz - 0.3880*L_AA_AC - 0.0197*L_TS_AI - 0.0934*L_TS_AC + 0.0558*A_years + 0.2930*S + 26.4715*H_m - 0.0361*W_kg;
 
         GH_est_global = origin + R_scap * [GHx; GHy; GHz];
+        
+        % Erro euclidiano
+        erro_euclidiano = norm(GH_est_global - HHC_gt);
 
-        % Ground truth
-        raw_hum = readtable(nome_f, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
-        idx_hhc = find(contains(raw_hum.Properties.VariableNames, 'HHC'), 1);
-        HHC_gt = mean(table2array(raw_hum(:, idx_hhc:idx_hhc+2)), 1, 'omitnan')';
+        % Calculo do desvio padrão Frame a Frame
+        num_frames = size(AA_all, 1);
+        erros_frame = NaN(num_frames, 1);
 
-        % Cálculo do Erro Euclidiano
-        erro_3d = norm(GH_est_global - HHC_gt);
+        for f = 1:num_frames
+            % Repete a lógica para cada frame individual para medir a flutuação
+            AA_f = AA_all(f, :)'; TS_f = TS_all(f, :)'; AI_f = AI_all(f, :)'; 
+            AC_f = AC_all(f, :)'; HHC_f = HHC_all(f, :)';
 
-        %% ADICIONAR À TABELA RESUMO
-        nova_linha = table({nome_f}, {sex_str}, A_years, H_m, W_kg, erro_3d, ...
-            'VariableNames', {'Ficheiro', 'Sexo', 'Idade', 'Altura_m', 'Peso_kg', 'Erro_Euclidiano_mm'});
+            if any(isnan([AA_f; TS_f; AI_f; AC_f; HHC_f])), continue; end
+
+            orig_f = AA_f;
+            ez_f = (AA_f - TS_f) / norm(AA_f - TS_f);
+            ex_f = cross(AI_f - AA_f, TS_f - AA_f); ex_f = ex_f / norm(ex_f);
+            ey_f = cross(ez_f, ex_f); ey_f = ey_f / norm(ey_f);
+            R_f = [ex_f ey_f ez_f];
+
+            AC_lf = R_f' * (AC_f - orig_f); AI_lf = R_f' * (AI_f - orig_f);
+            
+            GHx_f = 25.5316 + 0.6334*AC_lf(1) + 0.7842*AC_lf(2) - 0.0832*AI_lf(3) - 0.2673*dist(AA_f, TS_f) + 0.0365*dist(AA_f, AI_f) - 0.5353*dist(AA_f, AC_f) + 0.0843*dist(TS_f, AI_f) + 0.2350*dist(TS_f, AC_f) - 0.1246*dist(AI_f, AC_f) - 0.0237*A_years + 2.1296*S - 1.1900*H_m + 0.0221*W_kg;
+            GHy_f = -6.7070 - 0.2514*AC_lf(1) + 0.7558*AC_lf(2) + 0.0264*AI_lf(3) - 0.0620*dist(AA_f, AI_f) - 1.7641*S - 5.7094*H_m;
+            GHz_f = -22.5233 + 0.5954*AC_lf(1) + 0.0600*AC_lf(2) + 0.1085*AI_lf(3) + 0.3983*AC_lf(3) - 0.3880*dist(AA_f, AC_f) - 0.0197*dist(TS_f, AI_f) - 0.0934*dist(TS_f, AC_f) + 0.0558*A_years + 0.2930*S + 26.4715*H_m - 0.0361*W_kg;
+
+            GH_est_f = orig_f + R_f * [GHx_f; GHy_f; GHz_f];
+            erros_frame(f) = norm(GH_est_f - HHC_f);
+        end
+
+        % Desvio padrão de cada Erro euclidiano
+        erro_sd = std(erros_frame, 'omitnan');
+
+        %% 6. ADICIONAR À TABELA RESUMO
+        nova_linha = table({nome_f}, {sex_str}, A_years, H_m, W_kg, erro_euclidiano, erro_sd, ...
+            'VariableNames', {'Ficheiro', 'Sexo', 'Idade', 'Altura_m', 'Peso_kg', 'Erro_Euclidiano_mm', 'Desvio_Padrao_mm'});
         resultados_finais = [resultados_finais; nova_linha];
         
-        fprintf('OK! Erro: %.2f mm\n', erro_3d);
+        fprintf('OK! Erro Euclidiano: %.2f ± %.2f mm\n', erro_euclidiano, erro_sd);
 
     catch ME
-        fprintf('FALHOU! Erro: %s\n', ME.message);
+        fprintf('FALHOU! Motivo: %s\n', ME.message);
     end
 end
 
-% Guardar no excel
+%% 7. GUARDAR EXCEL FINAL
 if ~isempty(resultados_finais)
-    writetable(resultados_finais, 'Relatorio_Final_20_Individuos.xlsx');
-    fprintf('\nFicheiro "Relatorio_Final_20_Individuos.xlsx" criado com sucesso!\n');
-    
-    % Estatísticas Rápidas no ecrã
-    fprintf('Erro Médio da Amostra: %.2f mm\n', mean(resultados_finais.Erro_Euclidiano_mm));
+    writetable(resultados_finais, 'AA_Relatorio_Final_20_Individuos.xlsx');
 else
-    fprintf('\nA tabela ficou vazia. Verifique se os ficheiros Excel estão na pasta correta.\n');
+    fprintf('\nA tabela ficou vazia. Verifique os erros assinalados acima.\n');
 end
