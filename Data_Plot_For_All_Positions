@@ -1,0 +1,105 @@
+% Plot dos marcadores TS, IA, PLA, AC, LE, ME;
+% Os ficheiros devem estar todos na mesma pasta, para aquilo que queremos
+% analisar, dá para todas as posições 
+
+clear all; close all; clc
+
+% tipo de ficheiros .xlsx
+arquivos = dir('*.xlsx');
+arquivos = arquivos(~startsWith({arquivos.name}, '~$')); % Ignorar temporários
+num_ficheiros = length(arquivos);
+
+if num_ficheiros == 0
+    error('Nenhum ficheiro Excel encontrado na pasta atual.');
+end
+
+% marcadores a serem analisados
+marcadores_procura = {
+    'Right trigonum','Right inferior angle','Right posterolateral acromion', 'Right AC', 'Right forearm', 'Right medial elbow'
+};
+
+titulos_plot = {
+    'TS (Right Trigonum)', 'IA (Inferior Angle)', 'PLA (Post. Acromion)', 'AC (Right AC)', 'LE (Right Forearm)', 'ME (Right Medial Elbow)'
+};
+
+% Figura principal
+fig_principal = figure('Name', 'Trajetória dos Marcadores Vicon', ...
+    'NumberTitle', 'off', 'Units', 'normalized', 'Position', [0.1 0.1 0.8 0.8]);
+
+% Título geral da janela
+sgtitle('Análise Cinemática - Filtragem de Marcadores', 'FontSize', 16, 'FontWeight', 'bold');
+
+% Criar as abas
+grupo_abas = uitabgroup(fig_principal);
+
+fprintf('\n\n', num_ficheiros);
+
+% For para correr os ficheiros todos
+for i = 1:num_ficheiros
+    nome_ficheiro = arquivos(i).name;
+    
+    % Criar um nome mais curto para a aba (para caberem várias no ecrã)
+    % Exemplo: remove '_output.xlsx' do nome
+    nome_aba = strrep(nome_ficheiro, '_output.xlsx', ''); 
+    
+    % Criar a nova aba associada ao grupo
+    aba = uitab(grupo_abas, 'Title', sprintf('Fich %d: %s', i, nome_aba));
+    
+    try
+        % Ler os dados de forma dinâmica (sem limitar linhas, e ir buscar o numero de frames, para dar para generalizar)
+        opts = detectImportOptions(nome_ficheiro, 'Sheet', 'vicon');
+        opts.VariableNamingRule = 'preserve';
+        dados_vicon = readtable(nome_ficheiro, opts);
+        cabecalhos = dados_vicon.Properties.VariableNames;
+        
+        num_frames = height(dados_vicon);
+        vetor_tempo = 1:num_frames;
+        
+        % Loop para os 6 subplots para cada marcador
+        for j = 1:length(marcadores_procura)
+            
+            % Encontrar o índice da coluna do marcador atual
+            idx = find(contains(cabecalhos, marcadores_procura{j}, 'IgnoreCase', true), 1);
+            
+            % Criar o subplot associado explicitamente à 'aba'
+            ax = subplot(2, 3, j, 'Parent', aba);
+            
+            if isempty(idx)
+                title(ax, titulos_plot{j});
+                text(ax, 0.5, 0.5, 'Marcador não encontrado', ...
+                    'HorizontalAlignment', 'center', 'Color', 'red');
+                set(ax, 'XTick', [], 'YTick', []);
+                continue;
+            end
+            
+            % Extrair as 3 colunas (X, Y, Z)
+            dados_xyz = table2array(dados_vicon(:, idx:idx+2));
+            
+            % Fazer os plots X, Y, Z no eixo (ax) atual
+            plot(ax, vetor_tempo, dados_xyz(:, 1), 'r', 'LineWidth', 1.2); hold(ax, 'on');
+            plot(ax, vetor_tempo, dados_xyz(:, 2), 'g', 'LineWidth', 1.2);
+            plot(ax, vetor_tempo, dados_xyz(:, 3), 'b', 'LineWidth', 1.2);
+            hold(ax, 'off');
+            
+            % Formatação do Subplot
+            title(ax, titulos_plot{j}, 'Interpreter', 'none');
+            xlabel(ax, 'Tempo (Frames)');
+            ylabel(ax, 'Posição (mm)');
+            legend(ax, {'X', 'Y', 'Z'}, 'Location', 'best');
+            grid(ax, 'on');
+            xlim(ax, [1 num_frames]); % Adapta automaticamente ao tamanho do ficheiro
+            
+        end
+        fprintf('Aba %d criada: %s (%d frames)\n', i, nome_ficheiro, num_frames);
+        
+    catch ME
+        % Se o Excel estiver corrompido, cria uma mensagem de erro na própria aba
+        ax_err = axes('Parent', aba);
+        text(ax_err, 0.5, 0.5, sprintf('Erro ao ler ficheiro:\n%s', ME.message), ...
+            'HorizontalAlignment', 'center', 'Color', 'red', 'FontSize', 12);
+        set(ax_err, 'XTick', [], 'YTick', []);
+        fprintf('Erro na Aba %d: %s\n', i, ME.message);
+    end
+end
+
+fprintf('\nFiguras criadas com sucesso\n');
