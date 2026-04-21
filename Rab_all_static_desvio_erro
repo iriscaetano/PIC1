@@ -1,29 +1,33 @@
 function resultados = calcular_GH_Rab()
     clear; clc;
-    ficheiros = {
-        'O45_001_F_47_R_static_t02_output.xlsx'
-        'O45_002_M_52_R_static_t02_output.xlsx'
-        'O45_003_F_51_R_static_t01_output.xlsx'
-        'O45_004_M_50_R_static_t01_output.xlsx'
-        'O45_005_F_60_R_static_t01_output.xlsx'
-        'O45_006_M_61_R_static_t03_output.xlsx'
-        'O45_007_F_66_R_static_t03_output.xlsx'
-        'O45_008_M_66_R_static_t02_output.xlsx'
-        'O45_009_F_63_R_static_t02_output.xlsx'
-        'O45_010_M_62_R_static_t01_output.xlsx'
-        'U35_003_M_24_R_static_t01_output.xlsx'
-        'U35_004_M_33_R_static_t01_output.xlsx'
-        'U35_005_M_26_R_static_t01_output.xlsx'
-        'U35_006_F_27_R_static_t01_output.xlsx'
-        'U35_007_F_27_R_static_t02_output.xlsx'
-        'U35_008_F_22_R_static_t03_output.xlsx'
-        'U35_009_M_22_R_static_t01_output.xlsx'
-        'U35_010_M_27_R_static_t01_output.xlsx'
-    };
+    
+
+    % Construir o caminho para a pasta alvo
+    pasta_alvo = fullfile(pwd, 'Kinematic_output_database_(BF_coordinate_system)');
+    
+    % Padrão de pesquisa: '**' diz ao MATLAB para procurar em todas as subpastas
+    % '*static*.xlsx' garante que só apanha os ficheiros de calibração estática
+    padrao_pesquisa = fullfile(pasta_alvo, '**', '*static*.xlsx');
+    
+    % Obter a lista de ficheiros
+    lista_ficheiros = dir(padrao_pesquisa);
+    
+    % Verificar se encontrou ficheiros
+    if isempty(lista_ficheiros)
+        error('Não foram encontrados ficheiros Excel com "static" no nome no diretório especificado:\n%s', pasta_alvo);
+    else
+        fprintf('Foram encontrados %d ficheiros estáticos. A iniciar processamento...\n\n', length(lista_ficheiros));
+    end
+
+    % Inicializar struct de resultados
     resultados = struct();
     
-    for i = 1:length(ficheiros)
-        file_static = ficheiros{i};
+    % =====================================================================
+    % 2. PROCESSAMENTO DOS FICHEIROS
+    % =====================================================================
+    for i = 1:length(lista_ficheiros)
+        % Construir o caminho completo para o ficheiro atual
+        file_static = fullfile(lista_ficheiros(i).folder, lista_ficheiros(i).name);
         
         % --- Ground truth (HHC) ---
         dados_humerus = readmatrix(file_static, 'Sheet','humerus');       
@@ -45,7 +49,6 @@ function resultados = calcular_GH_Rab()
         leftAC = mean(leftAC_frames, 1, 'omitnan');
         
         % --- Marcadores da Escápula (AA, TS, AI) ---
-        % Leitura e cálculo da média para a calibração estática
         AA_frames = dados_vicon(2:end, 10:12);
         AA = mean(AA_frames(~all(isnan(AA_frames),2),:), 1, 'omitnan');
         
@@ -61,15 +64,10 @@ function resultados = calcular_GH_Rab()
         % --- Cálculo GH (Rab) ---
         GH_calc = [AC(1), AC(2) - 0.17 * D_AC, AC(3)];
         
-        % --- Erro Global ---
+        % --- Erro Euclidiano do Indivíduo ---
         erro = norm(GH_calc - HHC);
         
-        % Desvio padrão do erro ao longo dos frames
-        erro_frames = sqrt(sum((HHC_frames - GH_calc).^2, 2));
-        erro_std = std(erro_frames, 'omitnan');
-        
         % --- Sistema Local da Escápula (ISB) ---
-        % Garantir que os marcadores da escápula existem antes de calcular
         if ~any(isnan(AA)) && ~any(isnan(TS)) && ~any(isnan(AI))
             ez_s = (AA - TS) / norm(AA - TS); 
             v1 = AI - AA; v2 = TS - AA;
@@ -82,39 +80,55 @@ function resultados = calcular_GH_Rab()
             % Origem no Angulus Acromialis
             Origem_Scap = AA;
             
-            % Conversão para o referencial local (Matriz Transposta * Vetor Relativo)
+            % Conversão para o referencial local
             GH_calc_local_scap = (R_scap' * (GH_calc - Origem_Scap)')';
             HHC_local_scap = (R_scap' * (HHC - Origem_Scap)')';
         else
-            % Se faltar algum marcador escapular na estática
             GH_calc_local_scap = [NaN, NaN, NaN];
             HHC_local_scap = [NaN, NaN, NaN];
         end
         
         % --- Guardar resultados na struct ---
-        resultados(i).ficheiro = file_static;
+        resultados(i).ficheiro = lista_ficheiros(i).name; % Guardamos apenas o nome para não ficar muito longo
         resultados(i).GH_calc_Global = GH_calc;
         resultados(i).HHC_Global = HHC;
-        resultados(i).GH_calc_LocalScap = GH_calc_local_scap; % Guardar local
-        resultados(i).HHC_LocalScap = HHC_local_scap;         % Guardar local
+        resultados(i).GH_calc_LocalScap = GH_calc_local_scap; 
+        resultados(i).HHC_LocalScap = HHC_local_scap;         
         resultados(i).erro = erro;
-        resultados(i).erro_std = erro_std;
         
-        % --- Output no ecrã ---
-        fprintf('Ficheiro: %s\n', file_static);
-        disp('GH Calculado (Global):')
-        disp(GH_calc)
-        disp('HHC Ground Truth (Global):')
-        disp(HHC)
-        disp('GH Calculado (Local Escápula):')
-        disp(GH_calc_local_scap)
-        disp('HHC Ground Truth (Local Escápula):')
-        disp(HHC_local_scap)
-        disp('Erro euclidiano:')
-        disp(erro)
-        disp('Desvio padrão do erro:')
-        disp(erro_std);
+        % --- Output no ecrã individual ---
+        fprintf('Processado: %s | Erro Euclidiano: %.4f mm\n', lista_ficheiros(i).name, erro);
     end
 end
 
+% Executar a função
 resultados_finais = calcular_GH_Rab();
+
+% =========================================================================
+% 3. ESTATÍSTICAS GLOBAIS E PLOT
+% =========================================================================
+
+% Extrair os valores de erro da struct para um vetor
+erros = [resultados_finais.erro];
+
+% Calcular Estatísticas Globais
+erro_medio_global = mean(erros, 'omitnan');
+erro_std_global = std(erros, 'omitnan');
+
+% Mostrar os resultados globais na Command Window
+fprintf('\n======================================================\n');
+fprintf(' RESUMO ESTATÍSTICO GLOBAL DA AMOSTRA ( %d Indivíduos )\n', length(erros));
+fprintf('======================================================\n');
+fprintf('Erro Euclidiano Médio: %.4f mm\n', erro_medio_global);
+fprintf('Desvio Padrão do Erro: %.4f mm\n', erro_std_global);
+fprintf('======================================================\n\n');
+
+% Criar uma nova figura e fazer o plot
+figure;
+histfit(erros, 10, 'normal'); 
+
+% Formatação do gráfico
+xlabel('Erro Euclidiano'); 
+ylabel('Frequência');
+title('Distribuição Gaussiana do Erro (GH de Rab vs Ground Truth HHC)');
+grid on;
