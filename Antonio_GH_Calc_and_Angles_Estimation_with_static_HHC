@@ -1,0 +1,160 @@
+function Antonio_GH_Calc_and_Angles_Estimation()
+    clear; clc;
+    %Ficheiros organizados numa pasta (por exemplo CA de todos numa pasta
+    %para correr e gerar excel de resultados)
+    % Procura apenas os originais para não ler os resultados gerados anteriormente
+    arquivos = dir('*_output.xlsx'); 
+    arquivos = arquivos(~startsWith({arquivos.name}, '~$')); % Ignora temporários
+    
+    if isempty(arquivos)
+        error('Nenhum ficheiro *_output.xlsx encontrado na pasta atual.');
+    end
+    
+    for i = 1:length(arquivos)
+        ficheiro_atual = arquivos(i).name;
+        fprintf('\nA processar ficheiro [%d/%d]: %s...\n', i, length(arquivos), ficheiro_atual);
+        
+        try
+           %Ler dados ( demografia e marcadores)
+            data_demo = readcell(ficheiro_atual, 'Sheet', 'Sheet1');
+            getD = @(lab) data_demo{find(strcmpi(data_demo(:,1), lab), 1), 2};
+            
+            A_years = getD('Age');
+            sex_str = getD('Sex');
+            H_m     = getD('Height') / 100; % cm para m
+            W_kg    = getD('Weight');
+            S = 0; if strcmpi(sex_str, 'M'), S = 1; end
+            
+            raw_vicon = readtable(ficheiro_atual, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
+            h_v = raw_vicon.Properties.VariableNames;
+            f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+            
+            % Extração de todas as frames (Matrizes N x 3)
+            AA_frames = table2array(raw_vicon(:, f_i('posterolateral acromion') : f_i('posterolateral acromion')+2));
+            TS_frames = table2array(raw_vicon(:, f_i('trigonum') : f_i('trigonum')+2));
+            AI_frames = table2array(raw_vicon(:, f_i('inferior angle') : f_i('inferior angle')+2));
+            AC_frames = table2array(raw_vicon(:, f_i('Right AC') : f_i('Right AC')+2));
+            
+            % Epicôndilos para o referencial do úmero
+            EL_frames = table2array(raw_vicon(:, f_i('lateral elbow') : f_i('lateral elbow')+2));
+            EM_frames = table2array(raw_vicon(:, f_i('medial elbow') : f_i('medial elbow')+2));
+            
+            % Ground Truth (HHC)
+            raw_hum = readtable(ficheiro_atual, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
+            idx_hhc = find(contains(raw_hum.Properties.VariableNames, 'HHC'), 1);
+            HHC_frames = table2array(raw_hum(:, idx_hhc:idx_hhc+2));
+            
+            num_frames = size(HHC_frames, 1);
+            
+            % Calculo do HHC na primeira frame e trancar o vetor local
+            % Encontrar a primeira frame onde os marcadores da escápula não são NaN
+            idx_valid = find(~any(isnan([AC_frames, AA_frames, TS_frames, AI_frames]), 2), 1);
+            
+            if isempty(idx_valid)
+                error('Nenhuma frame válida encontrada com todos os marcadores da escápula.');
+            end
+            
+            AC_1 = AC_frames(idx_valid, :); AA_1 = AA_frames(idx_valid, :);
+            TS_1 = TS_frames(idx_valid, :); AI_1 = AI_frames(idx_valid, :);
+            
+            % Referencial Escápula (Frame inicial)
+            Origem_1 = AA_1; 
+            ez_1 = (AA_1 - TS_1) / norm(AA_1 - TS_1); 
+            ex_1 = cross(AI_1 - AA_1, TS_1 - AA_1); ex_1 = ex_1 / norm(ex_1);
+            ey_1 = cross(ez_1, ex_1); ey_1 = ey_1 / norm(ey_1);
+            R_scap_1 = [ex_1(:), ey_1(:), ez_1(:)]; 
+            
+            % Projeções Locais
+            AC_loc = R_scap_1' * (AC_1 - Origem_1)';
+            AI_loc = R_scap_1' * (AI_1 - Origem_1)';
+            ACx = AC_loc(1); ACy = AC_loc(2); ACz = AC_loc(3); AIz = AI_loc(3);
+            
+            % Distâncias Iniciais
+            dist = @(p1, p2) norm(p1 - p2);
+            L_AA_TS = dist(AA_1, TS_1); L_AA_AI = dist(AA_1, AI_1); L_AA_AC = dist(AA_1, AC_1);
+            L_TS_AI = dist(TS_1, AI_1); L_TS_AC = dist(TS_1, AC_1); L_AI_AC = dist(AI_1, AC_1);
+            
+            % Regressão do António - GH Fixo
+            GHx = 25.5316 + 0.6334*ACx + 0.7842*ACy - 0.0832*AIz - 0.2673*L_AA_TS + 0.0365*L_AA_AI - 0.5353*L_AA_AC + 0.0843*L_TS_AI + 0.2350*L_TS_AC - 0.1246*L_AI_AC - 0.0237*A_years + 2.1296*S - 1.1900*H_m + 0.0221*W_kg;
+            GHy = -6.7070 - 0.2514*ACx + 0.7558*ACy + 0.0264*AIz - 0.0620*L_AA_AI - 1.7641*S - 5.7094*H_m;
+            GHz = -22.5233 + 0.5954*ACx + 0.0600*ACy + 0.1085*AIz + 0.3983*ACz - 0.3880*L_AA_AC - 0.0197*L_TS_AI - 0.0934*L_TS_AC + 0.0558*A_years + 0.2930*S + 26.4715*H_m - 0.0361*W_kg;
+            
+            GH_est_local_Fixo = [GHx; GHy; GHz];
+            
+            %variaveis para for
+            GH_calc = NaN(num_frames, 3);
+            erro_euclidiano = NaN(num_frames, 1);
+            erro_scapula_local = NaN(num_frames, 3);
+            GH_angles = NaN(num_frames, 3);
+            GH_calc_local_scap = NaN(num_frames, 3);
+            HHC_local_scap = NaN(num_frames, 3);
+            
+           %for frame a frame
+            for n = 1:num_frames
+                % Extrair marcadores da frame atual
+                AA = AA_frames(n, :);  TS = TS_frames(n, :);  AI = AI_frames(n, :);
+                EL = EL_frames(n, :);  EM = EM_frames(n, :);  HHC = HHC_frames(n, :);
+                % Nota: Já não precisamos de ler o AC aqui, pois a regressão já foi feita!
+                
+                % Ignorar frames com NaNs nos marcadores necessários
+                if any(isnan([AA TS AI EL EM HHC]))
+                    continue;
+                end
+                
+                % Atualizar Sistema Local da Escápula (Movimento dinâmico)
+                Origem_Scap = AA; 
+                ez_s = (AA - TS) / norm(AA - TS); 
+                v1 = AI - AA; v2 = TS - AA;
+                ex_s = cross(v1, v2); ex_s = ex_s / norm(ex_s);
+                ey_s = cross(ez_s, ex_s); ey_s = ey_s / norm(ey_s);
+                
+                R_scap = [ex_s(:), ey_s(:), ez_s(:)]; 
+                
+                % Converter GH Local Fixo para Global Dinâmico
+                GH_calc(n, :) = (Origem_Scap(:) + R_scap * GH_est_local_Fixo)';
+                
+                % Cálculo dos Erros
+                erro_vetor_global = GH_calc(n, :) - HHC; 
+                erro_euclidiano(n) = norm(erro_vetor_global);
+                erro_scapula_local(n, :) = (R_scap' * erro_vetor_global(:))';
+                
+                % Preencher os locais (O GH Calculado local será constante, igual ao GH_est_local_Fixo)
+                GH_calc_local_scap(n, :) = GH_est_local_Fixo';
+                HHC_local_scap(n, :) = (R_scap' * (HHC - Origem_Scap)')';
+                
+                % Atualizar Sistema Local do Úmero
+                PontoMedio_Epicondilos = (EM + EL) / 2;
+                ey_h = (GH_calc(n, :) - PontoMedio_Epicondilos); ey_h = ey_h / norm(ey_h);
+                ez_temp = (EL - EM); ez_temp = ez_temp / norm(ez_temp);
+                ex_h = cross(ey_h, ez_temp); ex_h = ex_h / norm(ex_h);
+                ez_h = cross(ex_h, ey_h); ez_h = ez_h / norm(ez_h);
+                
+                R_hum = [ex_h(:), ey_h(:), ez_h(:)];
+                
+                % Ângulos Articulares (Scapula -> Humerus)
+                R_GH_relativa = R_scap' * R_hum;
+                [GH_x, GH_y, GH_z] = dcm2angle(R_GH_relativa', 'YXY'); % Euler YXY standard
+                GH_angles(n, :) = [rad2deg(GH_x), rad2deg(GH_y), rad2deg(GH_z)];
+            end
+            %Guardar no excel
+            Frames = (1:num_frames)';
+            Tabela = table(Frames, GH_calc(:,1), GH_calc(:,2), GH_calc(:,3), ...
+                           GH_calc_local_scap(:,1), GH_calc_local_scap(:,2), GH_calc_local_scap(:,3), ...
+                           HHC_local_scap(:,1), HHC_local_scap(:,2), HHC_local_scap(:,3), ...
+                           erro_euclidiano, erro_scapula_local(:,1), erro_scapula_local(:,2), erro_scapula_local(:,3), ...
+                           GH_angles(:,1), GH_angles(:,2), GH_angles(:,3), ...
+                'VariableNames', {'Frame', 'GH_calc_Global_X', 'GH_calc_Global_Y', 'GH_calc_Global_Z', ...
+                                  'GH_LocalScap_X', 'GH_LocalScap_Y', 'GH_LocalScap_Z', ...
+                                  'HHC_LocalScap_X', 'HHC_LocalScap_Y', 'HHC_LocalScap_Z', ...
+                                  'Erro_Global', 'Erro_Scap_X', 'Erro_Scap_Y', 'Erro_Scap_Z', ...
+                                  'Angulo_Plane_Elev', 'Angulo_Elev', 'Angulo_Rot_Axial'});
+                              
+            nome_output = strrep(ficheiro_atual, 'output.xlsx', 'resultados_completos_GH_1_frame.xlsx');
+            writetable(Tabela, nome_output);
+            fprintf('Concluído! Guardado em: %s\n', nome_output);
+            
+        catch ME
+            fprintf('FALHOU no ficheiro %s. Erro: %s\n', ficheiro_atual, ME.message);
+        end
+    end
+end
