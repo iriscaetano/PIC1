@@ -1,0 +1,143 @@
+clear all; close all; clc;
+
+% -------- 1. CARREGAR DADOS DO FICHEIRO --------
+file_data = 'BNMS_LANDMARKS.xlsx';
+T = readtable(file_data, 'PreserveVariableNames', true);
+num_pacientes = height(T);
+
+% Criar colunas para as Coordenadas ISB no Excel
+T.GH_est_ISB_x = NaN(num_pacientes, 1);
+T.GH_est_ISB_y = NaN(num_pacientes, 1);
+T.GH_est_ISB_z = NaN(num_pacientes, 1);
+T.GH_gt_ISB_x  = NaN(num_pacientes, 1);
+T.GH_gt_ISB_y  = NaN(num_pacientes, 1);
+T.GH_gt_ISB_z  = NaN(num_pacientes, 1);
+T.Erro_Total_mm = NaN(num_pacientes, 1);
+
+resultados_erro = zeros(num_pacientes, 1);
+
+disp('======================================================')
+disp('--- A INICIAR PROCESSAMENTO EM LOTE (MESKERS & ISB) ---')
+disp('======================================================')
+
+for i = 1:num_pacientes
+    
+    % --- 1. Extrair nome do paciente e encontrar ficheiro ---
+    nome_completo_stl = T{i, 1}{1}; 
+    nome_base = strrep(nome_completo_stl, '_scapula', '');
+    
+    padrao_pesquisa = sprintf('%s_static_t*_output.xlsx', nome_base);
+    ficheiros_encontrados = dir(padrao_pesquisa);
+    
+    if isempty(ficheiros_encontrados)
+        fprintf('Paciente: %s | -> ERRO: Ficheiro não encontrado.\n', nome_base);
+        continue;
+    end
+    
+    file_vicon = ficheiros_encontrados(1).name;
+    
+    % -------- 2. DADOS VICON (Globais com 'omitnan') --------
+    try
+        HHC_frames = readmatrix(file_vicon, 'Sheet','humerus','Range','P2:R92');
+        HHC_global = mean(HHC_frames, 1, 'omitnan');
+        
+        AC_v = mean(readmatrix(file_vicon,'Sheet','vicon','Range','G2:I92'), 1, 'omitnan');
+        TS_v = mean(readmatrix(file_vicon,'Sheet','vicon','Range','P2:R92'), 1, 'omitnan');
+        AI_v = mean(readmatrix(file_vicon,'Sheet','vicon','Range','S2:U92'), 1, 'omitnan');
+        AA_v = mean(readmatrix(file_vicon,'Sheet','vicon','Range','J2:L92'), 1, 'omitnan');
+    catch
+        fprintf('Paciente: %s | -> ERRO: Falha ao ler Sheet do Excel.\n', nome_base);
+        continue;
+    end
+    
+    if any(isnan(HHC_global)) || any(isnan(AC_v)) || any(isnan(TS_v)) || any(isnan(AI_v)) || any(isnan(AA_v))
+        fprintf('Paciente: %s | -> ERRO: Marcadores em falta.\n', nome_base);
+        continue;
+    end
+
+    % -------- 3. DADOS STL --------
+    AA_stl  = [T{i, 2}, T{i, 3}, T{i, 4}];
+    AC_stl  = [T{i, 5}, T{i, 6}, T{i, 7}];
+    AI_stl  = [T{i, 8}, T{i, 9}, T{i, 10}];
+    PrC_stl = [T{i, 11}, T{i, 12}, T{i, 13}];
+    TS_stl  = [T{i, 14}, T{i, 15}, T{i, 16}];
+
+    % --- 3.1 Construir Referencial Local do STL (Meskers) ---
+    x_stl = -(TS_stl - AC_stl) / norm(TS_stl - AC_stl); 
+    v_temp_stl = AI_stl - AC_stl;
+    z_stl = -cross(x_stl, v_temp_stl);
+    z_stl = z_stl / norm(z_stl);
+    y_stl = -cross(x_stl, z_stl);
+    y_stl = y_stl / norm(y_stl);
+    A_stl = [x_stl(:), y_stl(:), z_stl(:)]; 
+    PrC_local = (A_stl' * (PrC_stl - AC_stl)')'; 
+    
+    % -------- 4. SISTEMA DE COORDENADAS VICON (Meskers) --------
+    x_v = -(TS_v - AC_v) / norm(TS_v - AC_v);
+    v_temp_v = AI_v - AC_v;
+    z_v = -cross(x_v, v_temp_v);
+    z_v = z_v / norm(z_v);
+    y_v = -cross(x_v, z_v);
+    y_v = y_v / norm(y_v);
+    A_vicon = [x_v(:), y_v(:), z_v(:)]; 
+    
+    AI_local_v = (A_vicon' * (AI_v - AC_v)')';        
+    TS_local_v = (A_vicon' * (TS_v - AC_v)')';
+    AA_local_v = (A_vicon' * (AA_v - AC_v)')';
+    
+    % -------- 5. REGRESSÃO (Meskers) --------
+    GHx = 18.9743 + 0.2434*PrC_local(1) + 0.2341*AI_local_v(1) + 0.0558*PrC_local(2) + 0.1590*(norm(AI_local_v - AA_local_v));
+    GHy = -3.8791 - 0.3940*(norm(AA_local_v)) + 0.1732*PrC_local(2) + 0.1205*AI_local_v(1) - 0.1002*(norm(PrC_local));
+    GHz = 9.2629 + 1.0255*PrC_local(3) - 0.2403*PrC_local(2) + 0.1720*(norm(TS_local_v - PrC_local));
+    GH_local = [GHx, GHy, GHz];
+    
+    % -------- 6. TRANSFORMAR PARA GLOBAL --------
+    GH_global = (A_vicon * GH_local')' + AC_v;
+    erro_total = norm(GH_global - HHC_global);
+    resultados_erro(i) = erro_total;
+    
+    % =========================================================================
+    % -------- 7. REFERENCIAL ISB (O TEU REFERENCIAL OFICIAL) --------
+    % =========================================================================
+    % Zs aponta do TS para o AA
+    z_isb = (AA_v - TS_v) / norm(AA_v - TS_v); 
+    
+    % Xs aponta para a Frente (Lateral(Zs) x Inferior(AI-AA) = Anterior)
+    v_temp_isb = AI_v - AA_v;
+    x_isb = cross(z_isb, v_temp_isb);
+    x_isb = x_isb / norm(x_isb);
+    
+    % Ys aponta para Cima (Lateral(Zs) x Anterior(Xs) = Superior)
+    y_isb = cross(z_isb, x_isb);
+    y_isb = y_isb / norm(y_isb);
+    
+    A_isb = [x_isb(:), y_isb(:), z_isb(:)];
+    
+    % Puxar os pontos Globais para o espaço ISB (Origem = AA_v)
+    GH_isb  = (A_isb' * (GH_global - AA_v)')';
+    HHC_isb = (A_isb' * (HHC_global - AA_v)')';
+    
+    % -------- 8. GUARDAR NA TABELA --------
+    T.GH_est_ISB_x(i) = GH_isb(1);
+    T.GH_est_ISB_y(i) = GH_isb(2);
+    T.GH_est_ISB_z(i) = GH_isb(3);
+    
+    T.GH_gt_ISB_x(i)  = HHC_isb(1);
+    T.GH_gt_ISB_y(i)  = HHC_isb(2);
+    T.GH_gt_ISB_z(i)  = HHC_isb(3);
+    
+    T.Erro_Total_mm(i) = erro_total;
+    
+    fprintf('Paciente: %s | Erro: %6.2f mm\n', nome_base, erro_total);
+end
+
+% -------- 9. EXPORTAR PARA EXCEL --------
+output_name = 'BNMS_LANDMARKS_COM_RESULTADOS_ISB.xlsx';
+writetable(T, output_name);
+
+disp(' ')
+disp('======================================================')
+disp('--- PROCESSAMENTO CONCLUÍDO ---')
+fprintf('Resultados guardados em: %s\n', output_name);
+fprintf('Erro Médio Total: %.4f mm\n', mean(resultados_erro(resultados_erro > 0)));
+disp('======================================================')
