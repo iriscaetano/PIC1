@@ -1,1 +1,184 @@
+function processar_dados_dinamicos_Rab_original_GH_fixo()
+    clear; clc;
 
+    pasta_alvo = fullfile(pwd, 'Kinematic_output_database_(BF_coordinate_system)');
+
+    % 1. BIBLIOTECA GH (ESTÁTICO - RAB ORIGINAL)
+ 
+    fprintf('### A criar biblioteca GH (Rab original)...\n');
+
+    padrao_static = fullfile(pasta_alvo, '**', '*static*.xlsx');
+    lista_static = dir(padrao_static);
+
+    biblioteca_GH = containers.Map();
+
+    for k = 1:length(lista_static)
+
+        ficheiro_static = fullfile(lista_static(k).folder, lista_static(k).name);
+        partes = split(lista_static(k).name, '_');
+        id = partes{1};
+
+        humerus = readmatrix(ficheiro_static, 'Sheet','humerus');
+        vicon   = readmatrix(ficheiro_static, 'Sheet','vicon');
+
+        % --- MÉDIA ---
+        AC  = mean(vicon(2:end,7:9), 1, 'omitnan');
+        leftAC = mean(vicon(2:end,25:27), 1, 'omitnan');
+        AA  = mean(vicon(2:end,10:12), 1, 'omitnan');
+        TS  = mean(vicon(2:end,16:18), 1, 'omitnan');
+        AI  = mean(vicon(2:end,19:21), 1, 'omitnan');
+
+        if any(isnan([AC leftAC AA TS AI]))
+            warning('Dados incompletos no estático de %s', id);
+            continue;
+        end
+
+        % --- Sistema escápula ---
+        ez_s = (AA - TS) / norm(AA - TS);
+        ex_s = cross((AI - AA), (TS - AA)); ex_s = ex_s / norm(ex_s);
+        ey_s = cross(ez_s, ex_s); ey_s = ey_s / norm(ey_s);
+        R_scap = [ex_s(:), ey_s(:), ez_s(:)];
+
+        % --- RAB ORIGINAL (GLOBAL) ---
+        D_AC = norm(AC - leftAC);
+        GH_est = [AC(1), AC(2) - 0.17 * D_AC, AC(3)];
+
+        % --- CONVERTER PARA LOCAL ---
+        GH_local = (R_scap' * (GH_est - AA)')';
+
+        biblioteca_GH(id) = GH_local;
+
+        fprintf('GH fixo criado para %s\n', id);
+    end
+
+
+    % 2. DINÂMICO COM GH FIXO
+ 
+    fprintf('\n### A processar dinâmicos...\n');
+
+    padrao_dinamico = fullfile(pasta_alvo, '**', '*_CA_*output.xlsx');
+    lista_ficheiros = dir(padrao_dinamico);
+
+    for i = 1:length(lista_ficheiros)
+
+        ficheiro_atual = fullfile(lista_ficheiros(i).folder, lista_ficheiros(i).name);
+        fprintf('\nA processar %s...\n', lista_ficheiros(i).name);
+
+        partes = split(lista_ficheiros(i).name, '_');
+        id = partes{1};
+
+        if ~isKey(biblioteca_GH, id)
+            warning('Sem GH estático para %s', id);
+            continue;
+        end
+
+        GH_local_fixo = biblioteca_GH(id);
+
+        % Leitura
+        dados_humerus = readmatrix(ficheiro_atual, 'Sheet', 'humerus');
+        dados_vicon   = readmatrix(ficheiro_atual, 'Sheet', 'vicon');
+
+        HHC_frames = dados_humerus(2:end, 16:18);
+
+        AA_frames = dados_vicon(2:end, 10:12);
+        TS_frames = dados_vicon(2:end, 16:18);
+        AI_frames = dados_vicon(2:end, 19:21);
+
+        EL_frames = dados_vicon(2:end, 55:57);
+        EM_frames = dados_humerus(2:end, 22:24);
+
+        num_frames = size(HHC_frames, 1);
+
+        % Inicialização
+        GH_calc = NaN(num_frames, 3);
+        GH_local_scap = NaN(num_frames, 3);
+        HHC_local_scap = NaN(num_frames, 3);
+
+        erro_euclidiano = NaN(num_frames, 1);
+        erro_scapula_local = NaN(num_frames, 3);
+
+        GH_angles = NaN(num_frames, 3);
+        HHC_angles = NaN(num_frames, 3);
+        Erro_Angulos = NaN(num_frames, 3);
+
+        for n = 1:num_frames
+
+            AA = AA_frames(n,:);
+            TS = TS_frames(n,:);
+            AI = AI_frames(n,:);
+            EL = EL_frames(n,:);
+            EM = EM_frames(n,:);
+            HHC = HHC_frames(n,:);
+
+            if any(isnan([AA TS AI EL EM HHC]))
+                continue;
+            end
+
+            % --- Sistema escápula ---
+            ez_s = (AA - TS) / norm(AA - TS);
+            ex_s = cross((AI - AA), (TS - AA)); ex_s = ex_s / norm(ex_s);
+            ey_s = cross(ez_s, ex_s); ey_s = ey_s / norm(ey_s);
+            R_scap = [ex_s(:), ey_s(:), ez_s(:)];
+
+            % --- PROJEÇÃO DO GH FIXO ---
+            GH_calc(n,:) = (R_scap * GH_local_fixo(:) + AA(:))';
+
+            % --- LOCAL ---
+            GH_local_scap(n,:) = (R_scap' * (GH_calc(n,:) - AA)')';
+            HHC_local_scap(n,:) = (R_scap' * (HHC - AA)')';
+
+            % --- ERRO ---
+            erro_vetor = GH_calc(n,:) - HHC;
+            erro_euclidiano(n) = norm(erro_vetor);
+            erro_scapula_local(n,:) = (R_scap' * erro_vetor(:))';
+
+            % --- CINEMÁTICA ---
+            PM_epi = (EM + EL) / 2;
+
+            ey_h = (GH_calc(n,:) - PM_epi); ey_h = ey_h / norm(ey_h);
+            ex_h = cross(ey_h, (EL-EM)); ex_h = ex_h / norm(ex_h);
+            ez_h = cross(ex_h, ey_h); ez_h = ez_h / norm(ez_h);
+            R_hum = [ex_h(:), ey_h(:), ez_h(:)];
+
+            ey_hr = (HHC - PM_epi); ey_hr = ey_hr / norm(ey_hr);
+            ex_hr = cross(ey_hr, (EL-EM)); ex_hr = ex_hr / norm(ex_hr);
+            ez_hr = cross(ex_hr, ey_hr); ez_hr = ez_hr / norm(ez_hr);
+            R_hum_real = [ex_hr(:), ey_hr(:), ez_hr(:)];
+
+            ang_calc = rad2deg(dcm2angle((R_scap' * R_hum)', 'YXY'));
+            ang_real = rad2deg(dcm2angle((R_scap' * R_hum_real)', 'YXY'));
+
+            GH_angles(n,:) = ang_calc;
+            HHC_angles(n,:) = ang_real;
+            Erro_Angulos(n,:) = ang_calc - ang_real;
+        end
+
+        % --- EXPORTAÇÃO ---
+        T = table((1:num_frames)', ...
+            GH_calc(:,1), GH_calc(:,2), GH_calc(:,3), ...
+            GH_local_scap(:,1), GH_local_scap(:,2), GH_local_scap(:,3), ...
+            HHC_local_scap(:,1), HHC_local_scap(:,2), HHC_local_scap(:,3), ...
+            erro_euclidiano, ...
+            erro_scapula_local(:,1), erro_scapula_local(:,2), erro_scapula_local(:,3), ...
+            GH_angles(:,1), GH_angles(:,2), GH_angles(:,3), ...
+            Erro_Angulos(:,1), Erro_Angulos(:,2), Erro_Angulos(:,3), ...
+        'VariableNames', {'Frame', ...
+            'GH_Global_X','GH_Global_Y','GH_Global_Z', ...
+            'GH_LocalScap_X','GH_LocalScap_Y','GH_LocalScap_Z', ...
+            'HHC_LocalScap_X','HHC_LocalScap_Y','HHC_LocalScap_Z', ...
+            'Erro_Global', ...
+            'Erro_Scap_X','Erro_Scap_Y','Erro_Scap_Z', ...
+            'Ang_Calc_Plane','Ang_Calc_Elev','Ang_Calc_Rot', ...
+            'Erro_Ang_Plane','Erro_Ang_Elev','Erro_Ang_Rot'});
+
+        [folder,name,~] = fileparts(ficheiro_atual);
+        nome_output = fullfile(folder, strrep(name,'output','resultados_completos.xlsx'));
+
+        if isfile(nome_output), delete(nome_output); end
+        writetable(T, nome_output);
+
+        fprintf('Guardado: %s\n', nome_output);
+    end
+end
+
+processar_dados_dinamicos_Rab_original_GH_fixo();
