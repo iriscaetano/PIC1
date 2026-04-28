@@ -1,0 +1,144 @@
+function visualizar_todos_os_resultados()
+    clear; clc;
+    % Procura os ficheiros na pasta atual
+    arquivos = dir('*_resultados_completos_GH_1_frame.xlsx');
+    
+    if isempty(arquivos)
+        error('Não foram encontrados ficheiros de resultados.');
+    end
+
+    % Inicialização de arrays para os Boxplots (Dados completos)
+    Todos_Erro_Scap_X = []; Todos_Erro_Scap_Y = []; Todos_Erro_Scap_Z = [];
+    Todos_Erro_Global = []; Todos_Angulo_Elev = [];
+
+    % Inicialização de arrays para a Fase de Subida (apenas erro global e ângulo)
+    Subida_Angulos = [];
+    Subida_Erros = [];
+
+    fprintf('A processar dados de %d sujeitos...\n', length(arquivos));
+
+    for i = 1:length(arquivos)
+        ficheiro_atual = arquivos(i).name;
+        dados = readtable(ficheiro_atual);
+        
+        % Extrair as colunas
+        angulos = dados.Angulo_Elev; 
+        erros_G = dados.Erro_Global;   
+        
+        % Acumular para os Boxplots
+        Todos_Erro_Scap_X = [Todos_Erro_Scap_X; dados.Erro_Scap_X];
+        Todos_Erro_Scap_Y = [Todos_Erro_Scap_Y; dados.Erro_Scap_Y];
+        Todos_Erro_Scap_Z = [Todos_Erro_Scap_Z; dados.Erro_Scap_Z];
+        Todos_Erro_Global = [Todos_Erro_Global; erros_G];
+        Todos_Angulo_Elev = [Todos_Angulo_Elev; angulos];
+
+        % --- Isolar a Fase de Subida por Sujeito ---
+        % Limpar NaNs apenas para garantir que o 'max' funciona bem
+        idx_val = ~isnan(angulos) & ~isnan(erros_G);
+        ang_limpo = angulos(idx_val);
+        err_limpo = erros_G(idx_val);
+
+        if ~isempty(ang_limpo)
+            [~, idx_max_elev] = max(ang_limpo); % Encontra o pico do movimento
+            Subida_Angulos = [Subida_Angulos; ang_limpo(1:idx_max_elev)];
+            Subida_Erros = [Subida_Erros; err_limpo(1:idx_max_elev)];
+        end
+    end
+
+    % Filtrar NaNs dos arrays globais
+    idx_validos = ~isnan(Todos_Erro_Global) & ~isnan(Todos_Angulo_Elev);
+    Erro_X = Todos_Erro_Scap_X(idx_validos);
+    Erro_Y = Todos_Erro_Scap_Y(idx_validos);
+    Erro_Z = Todos_Erro_Scap_Z(idx_validos);
+    Erro_G = Todos_Erro_Global(idx_validos);
+    Angulo_Elev = Todos_Angulo_Elev(idx_validos);
+
+    fig1 = figure('Name', 'Direção Anatómica do Erro', 'Color', 'w', 'Position', [50, 150, 800, 450]);
+    dados_direcionais = [Erro_X, Erro_Y, Erro_Z, Erro_G];
+    labels_eixos = {'Eixo X (Ant-Post)', 'Eixo Y (Sup-Inf)', 'Eixo Z (Med-Lat)', 'Erro Global'};
+
+    boxplot(dados_direcionais, 'Labels', labels_eixos, 'Colors', 'k', 'Symbol', 'o');
+    hold on;
+    yline(0, 'r--', 'Linha de Zero Erro', 'LineWidth', 2, 'Color', [0.85 0.32 0.09]);
+
+    title('Para onde falha a Estimativa GH?', 'FontSize', 14, 'FontWeight', 'bold');
+    ylabel('Erro de Posicionamento (mm)', 'FontWeight', 'bold');
+    grid on; box on;
+
+    fig2 = figure('Name', 'Erro Global vs Fases', 'Color', 'w', 'Position', [100, 100, 700, 450]);
+    limites_bins_box = [0, 45, 90, 135, 180];
+    nomes_bins_box = {'Baixa (0º-45º)', 'Média (45º-90º)', 'Alta (90º-135º)', 'Máxima (>135º)'};
+
+    grupos_elevacao = discretize(Angulo_Elev, limites_bins_box, 'categorical', nomes_bins_box);
+    boxplot(Erro_G, grupos_elevacao, 'Colors', 'k', 'Symbol', 'o');
+
+    title('Efeito da Amplitude Articular no Erro', 'FontSize', 14, 'FontWeight', 'bold');
+    xlabel('Fase da Elevação do Braço', 'FontWeight', 'bold');
+    ylabel('Erro Vetorial Global (mm)', 'FontWeight', 'bold');
+    grid on; box on;
+
+
+    % Agrupar os ângulos em "fatias" de 2 graus para fazer as linhas
+    passo_graus = 2;
+    bins_angulos_linha = 0:passo_graus:180;
+    centros_bins = bins_angulos_linha(1:end-1) + passo_graus/2;
+
+    get_stats = @(X, Y) calcular_estatisticas(X, Y, bins_angulos_linha);
+    [media_todos, sd_todos] = get_stats(Angulo_Elev, Erro_G); % Usar os dados já limpos de NaNs
+    [media_subida, sd_subida] = get_stats(Subida_Angulos, Subida_Erros);
+
+    fig3 = figure('Name', 'Erro Global Média ± SD', 'Color', 'w', 'Position', [150, 50, 1000, 500]);
+
+    % Movimento Completo
+    subplot(1, 2, 1);
+    desenhar_grafico_sombreado(centros_bins, media_todos, sd_todos, [0.2 0.6 1]);
+    title('Movimento Completo (Subida e Descida)', 'FontSize', 13, 'FontWeight', 'bold');
+    xlabel('Ângulo de Elevação (º)', 'FontWeight', 'bold');
+    ylabel('Erro Euclidiano (mm)', 'FontWeight', 'bold');
+    xlim([min(Angulo_Elev)-5, max(Angulo_Elev)+5]);
+    if max(media_todos) > 0, ylim([0, max(media_todos + sd_todos) + 5]); end
+
+    % Fase de Subida
+    subplot(1, 2, 2);
+    desenhar_grafico_sombreado(centros_bins, media_subida, sd_subida, [1 0.5 0.2]);
+    title('Apenas Fase de Subida', 'FontSize', 13, 'FontWeight', 'bold');
+    xlabel('Ângulo de Elevação (º)', 'FontWeight', 'bold');
+    xlim([min(Subida_Angulos)-5, max(Subida_Angulos)+5]);
+    if max(media_subida) > 0, ylim([0, max(media_subida + sd_subida) + 5]); end
+
+    sgtitle('Estimativa GH: Erro Euclidiano Contínuo ao longo do Movimento', 'FontSize', 15, 'FontWeight', 'bold');
+
+    fprintf('Todos os 3 gráficos gerados com sucesso!\n');
+end
+
+function [medias, sds] = calcular_estatisticas(angulos, erros, limites_bins)
+    grupos = discretize(angulos, limites_bins);
+    num_bins = length(limites_bins) - 1;
+    
+    medias = NaN(1, num_bins);
+    sds = NaN(1, num_bins);
+    
+    for b = 1:num_bins
+        erros_neste_bin = erros(grupos == b);
+        if ~isempty(erros_neste_bin)
+            medias(b) = mean(erros_neste_bin, 'omitnan');
+            sds(b) = std(erros_neste_bin, 'omitnan');
+        end
+    end
+end
+
+function desenhar_grafico_sombreado(x, y_mean, y_sd, cor_base)
+    idx_validos = ~isnan(y_mean);
+    x = x(idx_validos);
+    y_mean = y_mean(idx_validos);
+    y_sd = y_sd(idx_validos);
+    
+    if isempty(x), return; end
+
+    x_sombra = [x, fliplr(x)];
+    y_sombra = [y_mean + y_sd, fliplr(max(0, y_mean - y_sd))]; 
+
+    hold on; grid on; box on;
+    fill(x_sombra, y_sombra, cor_base, 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+    plot(x, y_mean, 'Color', cor_base, 'LineWidth', 2.5);
+end
