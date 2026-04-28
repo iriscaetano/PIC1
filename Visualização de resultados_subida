@@ -23,17 +23,7 @@ function visualizar_todos_os_resultados()
     fprintf('A processar a subida de %d sujeitos...\n', length(arquivos));
 
   
-    % Vamos contar os ficheiros reais que vamos processar para teres a certeza
-    contador_sujeitos = 0; 
-
-    for i = 1:length(arquivos)
-        % 1. IGNORAR O MÉTODO "TERESA"
-        if contains(arquivos(i).name, 'Teresa')
-            continue; % Salta imediatamente para o próximo ficheiro sem fazer nada
-        end
-        
-        contador_sujeitos = contador_sujeitos + 1; % Conta apenas os corretos
-        
+    
         ficheiro_atual = fullfile(arquivos(i).folder, arquivos(i).name);
         dados = readtable(ficheiro_atual);
         
