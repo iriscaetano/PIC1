@@ -1,0 +1,154 @@
+function visualizar_todos_os_resultados()
+    clear; clc;
+
+    % 1. Caminho e procura de ficheiros
+    pasta_alvo = fullfile(pwd, 'Kinematic_output_database_(BF_coordinate_system)');
+    padrao_procura = fullfile(pasta_alvo, '**', '*_CA_*resultados_completos.xlsx');
+    arquivos = dir(padrao_procura);
+    
+    if isempty(arquivos)
+        error('Não foram encontrados ficheiros CA na pasta:\n%s', pasta_alvo);
+    end
+
+    % Inicialização de arrays exclusivos para a SUBIDA
+    Subida_Erro_X = []; 
+    Subida_Erro_Y = []; 
+    Subida_Erro_Z = [];
+    Subida_Erros_G = [];
+    Subida_Angulos = [];
+
+    fprintf('A processar a subida de %d sujeitos...\n', length(arquivos));
+
+    % ... (código anterior da função) ...
+    fprintf('A processar a subida de %d sujeitos...\n', length(arquivos));
+
+  
+    % Vamos contar os ficheiros reais que vamos processar para teres a certeza
+    contador_sujeitos = 0; 
+
+    for i = 1:length(arquivos)
+        % 1. IGNORAR O MÉTODO "TERESA"
+        if contains(arquivos(i).name, 'Teresa')
+            continue; % Salta imediatamente para o próximo ficheiro sem fazer nada
+        end
+        
+        contador_sujeitos = contador_sujeitos + 1; % Conta apenas os corretos
+        
+        ficheiro_atual = fullfile(arquivos(i).folder, arquivos(i).name);
+        dados = readtable(ficheiro_atual);
+        
+ 
+        % 1. Extrair o ângulo calculado e o erro angular
+        angulos_calc = dados.Ang_Calc_Elev; 
+        erro_ang_elev = dados.Erro_Ang_Elev;
+        
+        % 2. RECUPERAR O ÂNGULO REAL (Fluoroscopia/HHC)
+        % Como Erro = Calc - Real  =>  Real = Calc - Erro
+        angulos_reais = angulos_calc - erro_ang_elev;
+        
+        % --- Identificar o pico da subida usando o ÂNGULO REAL ---
+        idx_val = find(~isnan(angulos_reais));
+        if isempty(idx_val), continue; end
+        
+        [~, local_max] = max(angulos_reais(idx_val));
+        idx_subida = idx_val(1:local_max); % Índices do início até ao pico
+        
+        % Acumular apenas dados da subida (usando o angulo real)
+        Subida_Angulos = [Subida_Angulos; angulos_reais(idx_subida)]; % <-- Agora usa o real
+        Subida_Erros_G = [Subida_Erros_G; dados.Erro_Global(idx_subida)];
+        Subida_Erro_X  = [Subida_Erro_X;  dados.Erro_Scap_X(idx_subida)];
+        Subida_Erro_Y  = [Subida_Erro_Y;  dados.Erro_Scap_Y(idx_subida)];
+        Subida_Erro_Z  = [Subida_Erro_Z;  dados.Erro_Scap_Z(idx_subida)];
+    end
+ 
+
+    % Limpeza final de NaNs (segurança)
+    idx_ok = ~isnan(Subida_Erros_G) & ~isnan(Subida_Angulos);
+    S_Ang = Subida_Angulos(idx_ok);
+    S_ErrG = Subida_Erros_G(idx_ok);
+    S_ErrX = Subida_Erro_X(idx_ok);
+    S_ErrY = Subida_Erro_Y(idx_ok);
+    S_ErrZ = Subida_Erro_Z(idx_ok);
+
+    % ==========================================
+    % GRÁFICO 1: DIREÇÃO ANATÓMICA DO ERRO (SUBIDA)
+    % ==========================================
+    fig1 = figure('Name', 'Direção Anatómica do Erro', 'Color', 'w', 'Position', [50, 150, 800, 450]);
+    dados_direcionais = [S_ErrX, S_ErrY, S_ErrZ, S_ErrG];
+    labels_eixos = {'Eixo X (Ant-Post)', 'Eixo Y (Sup-Inf)', 'Eixo Z (Med-Lat)', 'Erro Global'};
+
+    boxplot(dados_direcionais, 'Labels', labels_eixos, 'Colors', 'k', 'Symbol', 'o');
+    title('Direção Anatómica do Erro de Posicionamento GH (Fase de Subida)', 'FontSize', 14, 'FontWeight', 'bold');
+    ylabel('Erro de Posicionamento (mm)', 'FontWeight', 'bold');
+    grid on; box on;
+
+    % ==========================================
+    % GRÁFICO 2: ERRO GLOBAL VS FASES (SUBIDA)
+    % ==========================================
+    fig2 = figure('Name', 'Erro Global vs Fases (Subida)', 'Color', 'w', 'Position', [100, 100, 700, 450]);
+    limites_bins_box = [0, 45, 90, 135, 180];
+    nomes_bins_box = {'Baixa (0º-45º)', 'Média (45º-90º)', 'Alta (90º-135º)', 'Máxima (>135º)'};
+
+    grupos_elevacao = discretize(S_Ang, limites_bins_box, 'categorical', nomes_bins_box);
+    boxplot(S_ErrG, grupos_elevacao, 'Colors', 'k', 'Symbol', 'o');
+
+    title('Efeito da Amplitude Articular no Erro (Fase de Subida)', 'FontSize', 14, 'FontWeight', 'bold');
+    xlabel('Fase da Elevação do Braço', 'FontWeight', 'bold');
+    ylabel('Erro Vetorial Global (mm)', 'FontWeight', 'bold');
+    grid on; box on;
+
+    % ==========================================
+    % GRÁFICO 3: ERRO CONTÍNUO (SUBIDA)
+    % ==========================================
+    passo_graus = 2;
+    bins_angulos_linha = 0:passo_graus:180;
+    centros_bins = bins_angulos_linha(1:end-1) + passo_graus/2;
+
+    [media_subida, sd_subida] = calcular_estatisticas(S_Ang, S_ErrG, bins_angulos_linha);
+
+    fig3 = figure('Name', 'Erro Global Média ± SD (Subida)', 'Color', 'w', 'Position', [150, 50, 800, 500]);
+    desenhar_grafico_sombreado(centros_bins, media_subida, sd_subida, [1 0.5 0.2]);
+    
+    title('Estimativa GH: Erro Euclidiano ao longo da Subida', 'FontSize', 15, 'FontWeight', 'bold');
+    xlabel('Ângulo de Elevação (º)', 'FontWeight', 'bold');
+    ylabel('Erro Euclidiano (mm)', 'FontWeight', 'bold');
+    
+    xlim([0, max(S_Ang)+5]); % Garante que começa no 0
+    if ~all(isnan(media_subida))
+        ylim([0, max(media_subida + sd_subida, [], 'omitnan') + 5]); 
+    end
+
+    fprintf('Todos os 3 gráficos da fase de subida gerados com sucesso!\n');
+end
+
+% --- Funções Auxiliares (Colocar no final do ficheiro .m) ---
+
+function [medias, sds] = calcular_estatisticas(angulos, erros, limites_bins)
+    grupos = discretize(angulos, limites_bins);
+    num_bins = length(limites_bins) - 1;
+    medias = NaN(1, num_bins);
+    sds = NaN(1, num_bins);
+    for b = 1:num_bins
+        erros_neste_bin = erros(grupos == b);
+        if ~isempty(erros_neste_bin)
+            medias(b) = mean(erros_neste_bin, 'omitnan');
+            sds(b) = std(erros_neste_bin, 'omitnan');
+        end
+    end
+end
+
+function desenhar_grafico_sombreado(x, y_mean, y_sd, cor_base)
+    idx_validos = ~isnan(y_mean);
+    if ~any(idx_validos), return; end
+    x = x(idx_validos);
+    y_mean = y_mean(idx_validos);
+    y_sd = y_sd(idx_validos);
+    
+    x_sombra = [x, fliplr(x)];
+    y_sombra = [y_mean + y_sd, fliplr(max(0, y_mean - y_sd))]; 
+    hold on; grid on; box on;
+    fill(x_sombra, y_sombra, cor_base, 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+    plot(x, y_mean, 'Color', cor_base, 'LineWidth', 2.5);
+end
+
+visualizar_todos_os_resultados();
