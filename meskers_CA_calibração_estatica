@@ -1,0 +1,146 @@
+function meskers_dynamic_com_calibracao_estatica()
+    clear; clc;
+    
+    % ===== 1. LER BASE DE DADOS COM OS RESULTADOS ESTÁTICOS ISB =====
+    % Agora lemos diretamente o Excel gerado pelo código anterior
+    T_STATIC = readtable('BNMS_LANDMARKS_COM_RESULTADOS_ISB.xlsx', 'PreserveVariableNames', true);
+    
+    pasta = uigetdir(pwd,'Seleciona pasta com ficheiros dinâmicos');
+    if pasta == 0
+        disp('Operação cancelada pelo utilizador.');
+        return;
+    end
+    
+    arquivos = dir(fullfile(pasta,'**','*output*.xlsx'));
+    arquivos = arquivos(~startsWith({arquivos.name}, '~$'));
+    
+    if isempty(arquivos)
+        error('Nenhum ficheiro *_output.xlsx encontrado na pasta selecionada.');
+    end
+    
+    for i = 1:length(arquivos)
+        ficheiro_atual = fullfile(arquivos(i).folder, arquivos(i).name);
+        fprintf('\nA processar ficheiro [%d/%d]: %s...\n', i, length(arquivos), ficheiro_atual);
+        
+        try
+            %% ===== 2. IDENTIFICAR SUJEITO E EXTRAIR GH ESTÁTICO =====
+            tokens = split(ficheiro_atual, filesep);
+            sujeito = tokens{end-1}; % O nome da pasta é o sujeito
+            
+            % Procurar o sujeito exato na coluna FILE do Excel
+            idx_subj = strcmp(string(T_STATIC.FILE), sujeito);
+            if ~any(idx_subj)
+                idx_subj = strcmp(string(T_STATIC.FILE), [sujeito '_scapula']);
+                if ~any(idx_subj)
+                    error('Paciente não encontrado no Excel de Resultados Estáticos para: %s', sujeito);
+                end
+            end
+            
+            % Coordenadas locais do Meskers que já estão no referencial ISB
+            GH_x_fixo = T_STATIC.GH_est_ISB_x(idx_subj);
+            GH_y_fixo = T_STATIC.GH_est_ISB_y(idx_subj);
+            GH_z_fixo = T_STATIC.GH_est_ISB_z(idx_subj);
+            
+         
+            GH_est_local_ISB_Fixo = [GH_x_fixo; GH_y_fixo; GH_z_fixo];
+            
+            %% ===== 3. LER DADOS VICON (MUNDO REAL) =====
+            raw_vicon = readtable(ficheiro_atual, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
+            h_v = raw_vicon.Properties.VariableNames;
+            f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+            
+            AA_frames = table2array(raw_vicon(:, f_i('posterolateral acromion'):f_i('posterolateral acromion')+2));
+            TS_frames = table2array(raw_vicon(:, f_i('trigonum'):f_i('trigonum')+2));
+            AI_frames = table2array(raw_vicon(:, f_i('inferior angle'):f_i('inferior angle')+2));
+            EL_frames = table2array(raw_vicon(:, f_i('lateral elbow'):f_i('lateral elbow')+2));
+            EM_frames = table2array(raw_vicon(:, f_i('medial elbow'):f_i('medial elbow')+2));
+            
+            %% ===== 4. LER HHC (GROUND TRUTH) =====
+            raw_hum = readtable(ficheiro_atual, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
+            idx_hhc = find(contains(raw_hum.Properties.VariableNames, 'HHC'), 1);
+            HHC_frames = table2array(raw_hum(:, idx_hhc:idx_hhc+2));
+            num_frames = size(HHC_frames, 1);
+            
+            %% ===== 5. LOOP DINÂMICO =====
+            GH_calc = NaN(num_frames,3);
+            GH_calc_local_scap = NaN(num_frames,3);
+            HHC_local_scap = NaN(num_frames,3);
+            erro_global = NaN(num_frames,1);
+            GH_angles = NaN(num_frames,3);
+            
+            for n = 1:num_frames
+                AA = AA_frames(n,:);
+                TS = TS_frames(n,:);
+                AI = AI_frames(n,:);
+                EL = EL_frames(n,:);
+                EM = EM_frames(n,:);
+                HHC = HHC_frames(n,:);
+                
+                % Se faltar algum marcador
+                if any(isnan([AA TS AI EL EM HHC]))
+                    continue;
+                end
+                
+                %% GAIOLA ISB DA ESCÁPULA (Dinâmica)
+                Origem_ISB = AA;
+                ez_isb = (AA - TS) / norm(AA - TS);
+                ex_isb = cross(AI - AA, TS - AA); ex_isb = ex_isb / norm(ex_isb);
+                ey_isb = cross(ez_isb, ex_isb); ey_isb = ey_isb / norm(ey_isb);
+                R_scap_isb = [ex_isb(:), ey_isb(:), ez_isb(:)];
+                
+                % ARRASTAR O PONTO: Transformar o GH local estático em Global dinâmico
+                GH_calc(n,:) = (Origem_ISB(:) + R_scap_isb * GH_est_local_ISB_Fixo)'; 
+                
+                % Erro Euclidiano (Referencial Global)
+                erro_global(n) = norm(GH_calc(n,:) - HHC);
+                
+                % Traduzir pontos Globais para Locais (Referencial ISB)
+                % (O GH_calc_local será igual ao Fixo, mas fica aqui para sanidade dos dados)
+                GH_calc_local_scap(n,:) = (R_scap_isb' * (GH_calc(n,:) - Origem_ISB)')';
+                HHC_local_scap(n,:) = (R_scap_isb' * (HHC - Origem_ISB)')';
+                
+                %% ÚMERO (Para os Ângulos Articulares)
+                P_cotovelo = (EM + EL)/2;
+                ey_h = GH_calc(n,:) - P_cotovelo; ey_h = ey_h / norm(ey_h);
+                ez_h = EL - EM; ez_h = ez_h / norm(ez_h);
+                ex_h = cross(ey_h, ez_h); ex_h = ex_h / norm(ex_h);
+                ez_h = cross(ex_h, ey_h); ez_h = ez_h / norm(ez_h);
+                R_hum = [ex_h(:), ey_h(:), ez_h(:)];
+                
+                % Cálculo ISB (A Fórmula à mão)
+                R_relativa = R_scap_isb' * R_hum;
+                beta = acos(R_relativa(2,2));
+                if abs(sin(beta)) > 1e-8
+                    alpha = atan2(R_relativa(1,2), R_relativa(3,2));
+                    gamma = atan2(R_relativa(2,1), -R_relativa(2,3));
+                else
+                    alpha = 0;
+                    gamma = atan2(-R_relativa(3,1), R_relativa(1,1));
+                end
+                GH_angles(n,:) = rad2deg([alpha, beta, gamma]);
+            end
+            
+            %% ===== 6. EXPORTAR PARA EXCEL =====
+            Frames = (1:num_frames)';
+            Tabela = table(Frames, ...
+                GH_calc(:,1), GH_calc(:,2), GH_calc(:,3), ...
+                GH_calc_local_scap(:,1), GH_calc_local_scap(:,2), GH_calc_local_scap(:,3), ...
+                HHC_local_scap(:,1), HHC_local_scap(:,2), HHC_local_scap(:,3), ...
+                erro_global, ...
+                GH_angles(:,1), GH_angles(:,2), GH_angles(:,3), ...
+                'VariableNames', {'Frame', ...
+                                  'GH_calc_Global_X', 'GH_calc_Global_Y', 'GH_calc_Global_Z', ...
+                                  'GH_LocalScap_ISB_X', 'GH_LocalScap_ISB_Y', 'GH_LocalScap_ISB_Z', ...
+                                  'HHC_LocalScap_ISB_X', 'HHC_LocalScap_ISB_Y', 'HHC_LocalScap_ISB_Z', ...
+                                  'Erro_Global', ...
+                                  'Angulo_Plane_Elev', 'Angulo_Elev', 'Angulo_Rot_Axial'});
+            
+            nome_output = strrep(ficheiro_atual,'output.xlsx','MESKERS_dinamico_result.xlsx');
+            writetable(Tabela, nome_output);
+            fprintf('Concluído! Guardado em: %s\n', nome_output);
+            
+        catch ME
+            fprintf('FALHOU no ficheiro %s.\nErro: %s\n', ficheiro_atual, ME.message);
+        end
+    end
+end
