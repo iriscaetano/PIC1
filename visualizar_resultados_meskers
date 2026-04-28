@@ -1,0 +1,176 @@
+function visualizar_resultados_meskers()
+    clear; clc; close all;
+    
+    % 1. Selecionar a pasta principal (database)
+    pasta = uigetdir(pwd, 'Seleciona a pasta com os ficheiros MESKERS_dinamico_result');
+    if pasta == 0
+        return;
+    end
+    
+   % Procura APENAS os ficheiros do ensaio CA em todas as subpastas
+    arquivos = dir(fullfile(pasta, '**', '*_CA_*MESKERS_dinamico_result.xlsx'));
+    arquivos = arquivos(~startsWith({arquivos.name}, '~$'));
+    
+    if isempty(arquivos)
+        error('Não foram encontrados ficheiros de resultados do Meskers.');
+    end
+
+    % --- LISTA DE PACIENTES A EXCLUIR ---
+    pacientes_excluidos = {'U35_001', 'U35_002', 'O45_005'};
+
+    % Inicialização de arrays para os Boxplots (Dados completos)
+    Todos_Erro_Scap_X = []; Todos_Erro_Scap_Y = []; Todos_Erro_Scap_Z = [];
+    Todos_Erro_Global = []; Todos_Angulo_Elev = [];
+
+    % Inicialização de arrays para a Fase de Subida
+    Subida_Angulos = [];
+    Subida_Erros = [];
+
+    fprintf('A processar dados de ficheiros dinâmicos...\n');
+    contador_ficheiros = 0;
+
+    for i = 1:length(arquivos)
+        ficheiro_atual = arquivos(i).name;
+        
+        % --- VERIFICAR SE É PARA EXCLUIR ---
+        saltar_paciente = false;
+        for j = 1:length(pacientes_excluidos)
+            if contains(ficheiro_atual, pacientes_excluidos{j}, 'IgnoreCase', true)
+                saltar_paciente = true;
+                break;
+            end
+        end
+        
+        if saltar_paciente
+            fprintf(' [!] A ignorar paciente excluído: %s\n', ficheiro_atual);
+            continue;
+        end
+        % -----------------------------------
+
+        caminho_completo = fullfile(arquivos(i).folder, ficheiro_atual);
+        dados = readtable(caminho_completo, 'PreserveVariableNames', true);
+        
+        % Extrair as colunas
+        angulos = dados.Angulo_Elev; 
+        erros_G = dados.Erro_Global;   
+        
+        % Calcular o erro direcional (Estimado - Real) no referencial da ISB
+        % Positivo em X = Muito para a frente; Positivo em Y = Muito para cima; Positivo em Z = Muito lateral
+        erro_X = dados.GH_LocalScap_ISB_X - dados.HHC_LocalScap_ISB_X;
+        erro_Y = dados.GH_LocalScap_ISB_Y - dados.HHC_LocalScap_ISB_Y;
+        erro_Z = dados.GH_LocalScap_ISB_Z - dados.HHC_LocalScap_ISB_Z;
+        
+        % Acumular para os Boxplots
+        Todos_Erro_Scap_X = [Todos_Erro_Scap_X; erro_X];
+        Todos_Erro_Scap_Y = [Todos_Erro_Scap_Y; erro_Y];
+        Todos_Erro_Scap_Z = [Todos_Erro_Scap_Z; erro_Z];
+        Todos_Erro_Global = [Todos_Erro_Global; erros_G];
+        Todos_Angulo_Elev = [Todos_Angulo_Elev; angulos];
+
+        % --- Isolar a Fase de Subida por Sujeito ---
+        idx_val = ~isnan(angulos) & ~isnan(erros_G);
+        ang_limpo = angulos(idx_val);
+        err_limpo = erros_G(idx_val);
+
+        if ~isempty(ang_limpo)
+            [~, idx_max_elev] = max(ang_limpo); % Encontra o pico do movimento
+            Subida_Angulos = [Subida_Angulos; ang_limpo(1:idx_max_elev)];
+            Subida_Erros = [Subida_Erros; err_limpo(1:idx_max_elev)];
+        end
+        
+        contador_ficheiros = contador_ficheiros + 1;
+    end
+    
+    fprintf('Processamento concluído! (%d ficheiros válidos integrados)\n', contador_ficheiros);
+
+    % Filtrar NaNs dos arrays globais para os plots
+    idx_validos = ~isnan(Todos_Erro_Global) & ~isnan(Todos_Angulo_Elev);
+    Erro_X = Todos_Erro_Scap_X(idx_validos);
+    Erro_Y = Todos_Erro_Scap_Y(idx_validos);
+    Erro_Z = Todos_Erro_Scap_Z(idx_validos);
+    Erro_G = Todos_Erro_Global(idx_validos);
+    Angulo_Elev = Todos_Angulo_Elev(idx_validos);
+
+    %% --- FIGURA 1: DIREÇÃO DO ERRO ---
+    fig1 = figure('Name', 'Direção Anatómica do Erro (Meskers)', 'Color', 'w', 'Position', [50, 150, 800, 450]);
+    dados_direcionais = [Erro_X, Erro_Y, Erro_Z, Erro_G];
+    labels_eixos = {'Eixo X (Ant-Post)', 'Eixo Y (Sup-Inf)', 'Eixo Z (Med-Lat)', 'Erro Global'};
+
+    boxplot(dados_direcionais, 'Labels', labels_eixos, 'Colors', 'k', 'Symbol', 'o');
+    hold on;
+  
+
+    title('Direção do Erro vs Erro Global (Meskers)', 'FontSize', 14, 'FontWeight', 'bold');
+    ylabel('Erro de Posicionamento (mm)', 'FontWeight', 'bold');
+    grid on; box on;
+
+    %% --- FIGURA 2: ERRO VS FASE DA ELEVAÇÃO ---
+    fig2 = figure('Name', 'Erro Global vs Fases (Meskers)', 'Color', 'w', 'Position', [100, 100, 700, 450]);
+    limites_bins_box = [0, 45, 90, 135, 180];
+    nomes_bins_box = {'Baixa (0º-45º)', 'Média (45º-90º)', 'Alta (90º-135º)', 'Máxima (>135º)'};
+
+    grupos_elevacao = discretize(Angulo_Elev, limites_bins_box, 'categorical', nomes_bins_box);
+    boxplot(Erro_G, grupos_elevacao, 'Colors', 'k', 'Symbol', 'o');
+
+    title('Efeito da Amplitude Articular no Erro (Meskers)', 'FontSize', 14, 'FontWeight', 'bold');
+    xlabel('Fase da Elevação do Braço', 'FontWeight', 'bold');
+    ylabel('Erro Vetorial Global (mm)', 'FontWeight', 'bold');
+    grid on; box on;
+
+%% --- FIGURA 3: ERRO CONTÍNUO (MÉDIA ± SD) Apenas Subida ---
+    passo_graus = 2;
+    bins_angulos_linha = 0:passo_graus:180;
+    centros_bins = bins_angulos_linha(1:end-1) + passo_graus/2;
+    
+    get_stats = @(X, Y) calcular_estatisticas(X, Y, bins_angulos_linha);
+    
+    % Calculamos apenas para a Fase de Subida
+    [media_subida, sd_subida] = get_stats(Subida_Angulos, Subida_Erros);
+    
+    fig3 = figure('Name', 'Erro Global Média ± SD (Subida - Meskers)', 'Color', 'w', 'Position', [150, 150, 800, 500]);
+    
+    % Desenhar o gráfico único (sem subplots)
+    desenhar_grafico_sombreado(centros_bins, media_subida, sd_subida, [1 0.5 0.2]); % Laranja
+    
+    title('Estimativa GH (Meskers): Erro Euclidiano na Fase de Subida', 'FontSize', 15, 'FontWeight', 'bold');
+    xlabel('Ângulo de Elevação (º)', 'FontWeight', 'bold');
+    ylabel('Erro Euclidiano (mm)', 'FontWeight', 'bold'); % Adicionei o ylabel que faltava
+    
+    xlim([min(Subida_Angulos)-5, max(Subida_Angulos)+5]);
+    if max(media_subida) > 0, ylim([0, max(media_subida + sd_subida) + 5]); end
+    
+    fprintf('Todos os 3 gráficos gerados com sucesso!\n');
+end
+
+%% FUNÇÕES AUXILIARES
+function [medias, sds] = calcular_estatisticas(angulos, erros, limites_bins)
+    grupos = discretize(angulos, limites_bins);
+    num_bins = length(limites_bins) - 1;
+    
+    medias = NaN(1, num_bins);
+    sds = NaN(1, num_bins);
+    
+    for b = 1:num_bins
+        erros_neste_bin = erros(grupos == b);
+        if ~isempty(erros_neste_bin)
+            medias(b) = mean(erros_neste_bin, 'omitnan');
+            sds(b) = std(erros_neste_bin, 'omitnan');
+        end
+    end
+end
+
+function desenhar_grafico_sombreado(x, y_mean, y_sd, cor_base)
+    idx_validos = ~isnan(y_mean);
+    x = x(idx_validos);
+    y_mean = y_mean(idx_validos);
+    y_sd = y_sd(idx_validos);
+    
+    if isempty(x), return; end
+
+    x_sombra = [x, fliplr(x)];
+    y_sombra = [y_mean + y_sd, fliplr(max(0, y_mean - y_sd))]; 
+
+    hold on; grid on; box on;
+    fill(x_sombra, y_sombra, cor_base, 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+    plot(x, y_mean, 'Color', cor_base, 'LineWidth', 2.5);
+end
