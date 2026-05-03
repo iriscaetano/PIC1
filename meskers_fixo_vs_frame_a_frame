@@ -1,0 +1,220 @@
+function meskers_comparacao_fixo_vs_frameAframe()
+    clear; clc;
+    
+    % ===== 1. LER BASE DE DADOS COM OS RESULTADOS ESTÁTICOS ISB =====
+    T_STATIC = readtable('BNMS_LANDMARKS_COM_RESULTADOS_ISB.xlsx', 'PreserveVariableNames', true);
+    
+    pasta = uigetdir(pwd,'Seleciona pasta com ficheiros dinâmicos');
+    if pasta == 0
+        disp('Operação cancelada pelo utilizador.');
+        return;
+    end
+    
+    arquivos = dir(fullfile(pasta,'**','*output*.xlsx'));
+    arquivos = arquivos(~startsWith({arquivos.name}, '~$'));
+    
+    if isempty(arquivos)
+        error('Nenhum ficheiro *_output.xlsx encontrado na pasta selecionada.');
+    end
+    
+    for i = 1:length(arquivos)
+        ficheiro_atual = fullfile(arquivos(i).folder, arquivos(i).name);
+        fprintf('\nA processar ficheiro [%d/%d]: %s...\n', i, length(arquivos), ficheiro_atual);
+        
+        try
+            %% ===== 2. IDENTIFICAR SUJEITO E EXTRAIR DADOS ESTÁTICOS =====
+            tokens = split(ficheiro_atual, filesep);
+            sujeito = tokens{end-1}; 
+            
+            idx_subj = strcmp(string(T_STATIC.FILE), sujeito);
+            if ~any(idx_subj)
+                idx_subj = strcmp(string(T_STATIC.FILE), [sujeito '_scapula']);
+                if ~any(idx_subj)
+                    error('Paciente não encontrado no Excel de Resultados Estáticos para: %s', sujeito);
+                end
+            end
+            
+            % --- MÉTODO 1 (Fixo): Coordenadas locais já em ISB ---
+            GH_x_fixo = T_STATIC.GH_est_ISB_x(idx_subj);
+            GH_y_fixo = T_STATIC.GH_est_ISB_y(idx_subj);
+            GH_z_fixo = T_STATIC.GH_est_ISB_z(idx_subj);
+            GH_est_local_ISB_Fixo = [GH_x_fixo; GH_y_fixo; GH_z_fixo];
+            
+            % --- MÉTODO 2 (Frame a Frame): Precisamos do PrC virtual ---
+            AC_stl  = [T_STATIC{idx_subj,5}, T_STATIC{idx_subj,6}, T_STATIC{idx_subj,7}];
+            AI_stl  = [T_STATIC{idx_subj,8}, T_STATIC{idx_subj,9}, T_STATIC{idx_subj,10}];
+            PrC_stl = [T_STATIC{idx_subj,11}, T_STATIC{idx_subj,12}, T_STATIC{idx_subj,13}];
+            TS_stl  = [T_STATIC{idx_subj,14}, T_STATIC{idx_subj,15}, T_STATIC{idx_subj,16}];
+            
+            % Construir gaiola STL e trancar o PrC
+            x_stl = -(TS_stl - AC_stl) / norm(TS_stl - AC_stl);
+            v_temp_stl = AI_stl - AC_stl;
+            z_stl = -cross(x_stl, v_temp_stl); z_stl = z_stl / norm(z_stl);
+            y_stl = -cross(x_stl, z_stl); y_stl = y_stl / norm(y_stl);
+            A_stl = [x_stl(:), y_stl(:), z_stl(:)];
+            PrC_local = (A_stl' * (PrC_stl - AC_stl)')';
+            
+            %% ===== 3. LER DADOS VICON (MUNDO REAL) =====
+            raw_vicon = readtable(ficheiro_atual, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
+            h_v = raw_vicon.Properties.VariableNames;
+            f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+            
+            % Voltámos a precisar do AC para o cálculo Frame a Frame!
+            AC_frames = table2array(raw_vicon(:, f_i('Right AC'):f_i('Right AC')+2));
+            AA_frames = table2array(raw_vicon(:, f_i('posterolateral acromion'):f_i('posterolateral acromion')+2));
+            TS_frames = table2array(raw_vicon(:, f_i('trigonum'):f_i('trigonum')+2));
+            AI_frames = table2array(raw_vicon(:, f_i('inferior angle'):f_i('inferior angle')+2));
+            EL_frames = table2array(raw_vicon(:, f_i('lateral elbow'):f_i('lateral elbow')+2));
+            EM_frames = table2array(raw_vicon(:, f_i('medial elbow'):f_i('medial elbow')+2));
+            
+            %% ===== 4. LER HHC (GROUND TRUTH) =====
+            raw_hum = readtable(ficheiro_atual, 'Sheet', 'humerus', 'VariableNamingRule', 'preserve');
+            idx_hhc = find(contains(raw_hum.Properties.VariableNames, 'HHC'), 1);
+            HHC_frames = table2array(raw_hum(:, idx_hhc:idx_hhc+2));
+            num_frames = size(HHC_frames, 1);
+            
+            %% ===== 5. LOOP DINÂMICO (DUPLO PROCESSAMENTO) =====
+            % Arrays para o Fixo
+            GH_calc_Fixo = NaN(num_frames,3);
+            GH_calc_local_ISB_Fixo = NaN(num_frames,3);
+            erro_global_Fixo = NaN(num_frames,1);
+            GH_angles_Fixo = NaN(num_frames,3);
+            
+            % Arrays para o Frame a Frame (Dinâmico)
+            GH_calc_Dyn = NaN(num_frames,3);
+            GH_calc_local_ISB_Dyn = NaN(num_frames,3);
+            erro_global_Dyn = NaN(num_frames,1);
+            GH_angles_Dyn = NaN(num_frames,3);
+            
+            % Array comum do Ground Truth (ISB)
+            HHC_local_scap_ISB = NaN(num_frames,3);
+            
+            for n = 1:num_frames
+                AC = AC_frames(n,:);
+                AA = AA_frames(n,:);
+                TS = TS_frames(n,:);
+                AI = AI_frames(n,:);
+                EL = EL_frames(n,:);
+                EM = EM_frames(n,:);
+                HHC = HHC_frames(n,:);
+                
+                % Verificação de NaNs (agora inclui o AC)
+                if any(isnan([AC AA TS AI EL EM HHC]))
+                    continue;
+                end
+                
+                %% --- GAIOLA ISB DA ESCÁPULA (Comum a ambos para os ângulos) ---
+                Origem_ISB = AA;
+                ez_isb = (AA - TS) / norm(AA - TS);
+                ex_isb = cross(AI - AA, TS - AA); ex_isb = ex_isb / norm(ex_isb);
+                ey_isb = cross(ez_isb, ex_isb); ey_isb = ey_isb / norm(ey_isb);
+                R_scap_isb = [ex_isb(:), ey_isb(:), ez_isb(:)];
+                
+                % Ground Truth em ISB (Só precisamos de calcular uma vez)
+                HHC_local_scap_ISB(n,:) = (R_scap_isb' * (HHC - Origem_ISB)')';
+                P_cotovelo = (EM + EL)/2;
+                ez_h_comum = EL - EM; ez_h_comum = ez_h_comum / norm(ez_h_comum); % Parte do Úmero que não muda
+                
+                %% =========================================================
+                %% MÉTODO 1: CALIBRAÇÃO ESTÁTICA (GH Fixo)
+                %% =========================================================
+                GH_calc_Fixo(n,:) = (Origem_ISB(:) + R_scap_isb * GH_est_local_ISB_Fixo)'; 
+                erro_global_Fixo(n) = norm(GH_calc_Fixo(n,:) - HHC);
+                GH_calc_local_ISB_Fixo(n,:) = (R_scap_isb' * (GH_calc_Fixo(n,:) - Origem_ISB)')';
+                
+                % Úmero e Ângulos (Fixo)
+                ey_h_Fixo = GH_calc_Fixo(n,:) - P_cotovelo; ey_h_Fixo = ey_h_Fixo / norm(ey_h_Fixo);
+                ex_h_Fixo = cross(ey_h_Fixo, ez_h_comum); ex_h_Fixo = ex_h_Fixo / norm(ex_h_Fixo);
+                ez_h_final_Fixo = cross(ex_h_Fixo, ey_h_Fixo); ez_h_final_Fixo = ez_h_final_Fixo / norm(ez_h_final_Fixo);
+                R_hum_Fixo = [ex_h_Fixo(:), ey_h_Fixo(:), ez_h_final_Fixo(:)];
+                
+                R_rel_Fixo = R_scap_isb' * R_hum_Fixo;
+                beta_F = acos(R_rel_Fixo(2,2));
+                if abs(sin(beta_F)) > 1e-8
+                    alpha_F = atan2(R_rel_Fixo(1,2), R_rel_Fixo(3,2)); gamma_F = atan2(R_rel_Fixo(2,1), -R_rel_Fixo(2,3));
+                else
+                    alpha_F = 0; gamma_F = atan2(-R_rel_Fixo(3,1), R_rel_Fixo(1,1));
+                end
+                GH_angles_Fixo(n,:) = rad2deg([alpha_F, beta_F, gamma_F]);
+                
+                %% =========================================================
+                %% MÉTODO 2: MESKERS FRAME A FRAME (Dinâmico)
+                %% =========================================================
+                % 1. Criar Gaiola Meskers para este exato milissegundo
+                x_m = -(TS - AC) / norm(TS - AC);
+                v_temp_m = AI - AC;
+                z_m = -cross(x_m, v_temp_m); z_m = z_m / norm(z_m);
+                y_m = -cross(x_m, z_m); y_m = y_m / norm(y_m);
+                A_vicon = [x_m(:), y_m(:), z_m(:)];
+                
+                % 2. Projetar as landmarks do corpo na gaiola
+                AI_local_v = (A_vicon' * (AI - AC)')';
+                AA_local_v = (A_vicon' * (AA - AC)')';
+                TS_local_v = (A_vicon' * (TS - AC)')';
+                
+                % 3. Aplicar as equações (A morada muda a cada frame!)
+                GHx_dyn = 18.9743 + 0.2434*PrC_local(1) + 0.2341*AI_local_v(1) + 0.0558*PrC_local(2) + 0.1590*norm(AI_local_v - AA_local_v);
+                GHy_dyn = -3.8791 - 0.3940*norm(AA_local_v) + 0.1732*PrC_local(2) + 0.1205*AI_local_v(1) - 0.1002*norm(PrC_local);
+                GHz_dyn = 9.2629  + 1.0255*PrC_local(3) - 0.2403*PrC_local(2) + 0.1720*norm(TS_local_v - PrC_local);
+                GH_local_Meskers_Dyn = [GHx_dyn; GHy_dyn; GHz_dyn];
+                
+                % 4. Atirar para o espaço Global e calcular o Erro
+                GH_calc_Dyn(n,:) = (AC(:) + A_vicon * GH_local_Meskers_Dyn)';
+                erro_global_Dyn(n) = norm(GH_calc_Dyn(n,:) - HHC);
+                
+                % 5. Puxar para a Gaiola ISB (para podermos comparar na mesma linguagem)
+                GH_calc_local_ISB_Dyn(n,:) = (R_scap_isb' * (GH_calc_Dyn(n,:) - Origem_ISB)')';
+                
+                % Úmero e Ângulos (Dinâmico)
+                ey_h_Dyn = GH_calc_Dyn(n,:) - P_cotovelo; ey_h_Dyn = ey_h_Dyn / norm(ey_h_Dyn);
+                ex_h_Dyn = cross(ey_h_Dyn, ez_h_comum); ex_h_Dyn = ex_h_Dyn / norm(ex_h_Dyn);
+                ez_h_final_Dyn = cross(ex_h_Dyn, ey_h_Dyn); ez_h_final_Dyn = ez_h_final_Dyn / norm(ez_h_final_Dyn);
+                R_hum_Dyn = [ex_h_Dyn(:), ey_h_Dyn(:), ez_h_final_Dyn(:)];
+                
+                R_rel_Dyn = R_scap_isb' * R_hum_Dyn;
+                beta_D = acos(R_rel_Dyn(2,2));
+                if abs(sin(beta_D)) > 1e-8
+                    alpha_D = atan2(R_rel_Dyn(1,2), R_rel_Dyn(3,2)); gamma_D = atan2(R_rel_Dyn(2,1), -R_rel_Dyn(2,3));
+                else
+                    alpha_D = 0; gamma_D = atan2(-R_rel_Dyn(3,1), R_rel_Dyn(1,1));
+                end
+                GH_angles_Dyn(n,:) = rad2deg([alpha_D, beta_D, gamma_D]);
+            end
+            
+            %% ===== 6. EXPORTAR PARA EXCEL (TABELA EXPANDIDA) =====
+            Frames = (1:num_frames)';
+            Tabela = table(Frames, ...
+                ... % Variáveis Método Fixo
+                GH_calc_Fixo(:,1), GH_calc_Fixo(:,2), GH_calc_Fixo(:,3), ...
+                GH_calc_local_ISB_Fixo(:,1), GH_calc_local_ISB_Fixo(:,2), GH_calc_local_ISB_Fixo(:,3), ...
+                erro_global_Fixo, ...
+                GH_angles_Fixo(:,1), GH_angles_Fixo(:,2), GH_angles_Fixo(:,3), ...
+                ... % Variáveis Método Dinâmico (Frame a Frame)
+                GH_calc_Dyn(:,1), GH_calc_Dyn(:,2), GH_calc_Dyn(:,3), ...
+                GH_calc_local_ISB_Dyn(:,1), GH_calc_local_ISB_Dyn(:,2), GH_calc_local_ISB_Dyn(:,3), ...
+                erro_global_Dyn, ...
+                GH_angles_Dyn(:,1), GH_angles_Dyn(:,2), GH_angles_Dyn(:,3), ...
+                ... % Ground Truth
+                HHC_local_scap_ISB(:,1), HHC_local_scap_ISB(:,2), HHC_local_scap_ISB(:,3), ...
+                'VariableNames', {'Frame', ...
+                                  'GH_Global_X_Fixo', 'GH_Global_Y_Fixo', 'GH_Global_Z_Fixo', ...
+                                  'GH_ISB_X_Fixo', 'GH_ISB_Y_Fixo', 'GH_ISB_Z_Fixo', ...
+                                  'Erro_Global_Fixo', ...
+                                  'Ang_Plane_Elev_Fixo', 'Ang_Elev_Fixo', 'Ang_Rot_Axial_Fixo', ...
+                                  ...
+                                  'GH_Global_X_FrameAFrame', 'GH_Global_Y_FrameAFrame', 'GH_Global_Z_FrameAFrame', ...
+                                  'GH_ISB_X_FrameAFrame', 'GH_ISB_Y_FrameAFrame', 'GH_ISB_Z_FrameAFrame', ...
+                                  'Erro_Global_FrameAFrame', ...
+                                  'Ang_Plane_Elev_FrameAFrame', 'Ang_Elev_FrameAFrame', 'Ang_Rot_Axial_FrameAFrame', ...
+                                  ...
+                                  'HHC_ISB_X', 'HHC_ISB_Y', 'HHC_ISB_Z'});
+            
+            nome_output = strrep(ficheiro_atual,'output.xlsx','MESKERS_COMP_result.xlsx');
+            writetable(Tabela, nome_output);
+            fprintf('Concluído! Guardado em: %s\n', nome_output);
+            
+        catch ME
+            fprintf('FALHOU no ficheiro %s.\nErro: %s\n', ficheiro_atual, ME.message);
+        end
+    end
+end
