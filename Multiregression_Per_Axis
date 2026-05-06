@@ -1,0 +1,150 @@
+clear; clc;
+%% =========================================================
+% 1. CONFIGURAÇÃO (Escolhe o modelo e as equações)
+%% =========================================================
+ficheiro_resultados = 'RESULTADOS_TODOS_ESTATICO_ISB.xlsx';
+
+% --- ESCOLHA DO MODELO (Descomenta apenas um bloco) ---
+
+% ANTONIO (Local ISB)
+modelo_para_analise = 'Antonio'; 
+eq_X = "GHx = 25.5316 + 0.6334*ACx + 0.7842*ACy - 0.0832*AIz - 0.2673*L_AA_TS + 0.0365*L_AA_AI - 0.5353*L_AA_AC + 0.0843*L_TS_AI + 0.2350*L_TS_AC - 0.1246*L_AI_AC - 0.0237*Age + 2.1296*Sex - 1.1900*Height + 0.0221*Weight";
+eq_Y = "GHy = -6.7070 - 0.2514*ACx + 0.7558*ACy + 0.0264*AIz - 0.0620*L_AA_AI - 1.7641*Sex - 5.7094*Height";
+eq_Z = "GHz = -22.5233 + 0.5954*ACx + 0.0600*ACy + 0.1085*AIz + 0.3983*ACz - 0.3880*L_AA_AC - 0.0197*L_TS_AI - 0.0934*L_TS_AC + 0.0558*Age + 0.2930*Sex + 26.4715*Height - 0.0361*Weight";
+
+% MESKERS (Local Meskers)
+%modelo_para_analise = 'Meskers';
+%eq_X = "GHx = 18.9743 + 0.2434*PrC_x + 0.2341*AI_x + 0.0558*PrC_y + 0.1590*Dist_AI_AA";
+%eq_Y = "GHy = -3.8791 - 0.3940*Dist_AA_AC + 0.1732*PrC_y + 0.1205*AI_x - 0.1002*Dist_PrC_AC";
+%eq_Z = "GHz = 9.2629 + 1.0255*PrC_z - 0.2403*PrC_y + 0.1720*Dist_TS_PrC";
+
+%% =========================================================
+% 2. IDENTIFICAÇÃO AUTOMÁTICA DE TODAS AS VARIÁVEIS POSSÍVEIS
+%% =========================================================
+T_mestre = readtable(ficheiro_resultados);
+T_land = readtable('BNMS_LANDMARKS.xlsx', 'VariableNamingRule', 'preserve');
+
+% Lista mestra para saber o que calcular no loop (todas as vars de todas as eqs)
+todas_eqs_unidas = strcat(eq_X, " ", eq_Y, " ", eq_Z);
+tokens_mestre = regexp(todas_eqs_unidas, '(?<!\d)[A-Za-z_][A-Za-z0-9_]*', 'match');
+vars_mestre = setdiff(unique(tokens_mestre), {'GHx','GHy','GHz'});
+
+X_matriz_bruta = []; yX = []; yY = []; yZ = [];
+
+%% =========================================================
+% 3. LOOP DE RECOLHA DE DADOS
+%% =========================================================
+fprintf('A recolher dados para o modelo %s...\n', modelo_para_analise);
+pasta_database = uigetdir(pwd, 'Seleciona a pasta Kinematic_output_database');
+
+for i = 1:height(T_mestre)
+    nome_paciente = T_mestre.Paciente{i};
+    f_out = dir(fullfile(pasta_database, '**', sprintf('%s_static_t*_output.xlsx', nome_paciente)));
+    f_out = f_out(~startsWith({f_out.name}, '~$'));
+    
+    if ~isempty(f_out)
+        try
+            path_v = fullfile(f_out(1).folder, f_out(1).name);
+            data_demo = readcell(path_v, 'Sheet', 'Sheet1');
+            getV = @(lab) data_demo{find(strcmpi(data_demo(:,1), lab), 1), 2};
+            
+            % --- BIBLIOTECA DE CÁLCULO ---
+            calc.Age = double(getV('Age'));
+            calc.Height = double(getV('Height'))/100;
+            calc.Weight = double(getV('Weight'));
+            calc.Sex = 0; if strcmpi(getV('Sex'), 'M'), calc.Sex = 1; end
+            
+            raw_v = readtable(path_v, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
+            h_v = raw_v.Properties.VariableNames;
+            f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+            AA = mean(table2array(raw_v(:, f_i('posterolateral acromion'):f_i('posterolateral acromion')+2)), 1, 'omitnan');
+            TS = mean(table2array(raw_v(:, f_i('trigonum'):f_i('trigonum')+2)), 1, 'omitnan');
+            AI = mean(table2array(raw_v(:, f_i('inferior angle'):f_i('inferior angle')+2)), 1, 'omitnan');
+            AC = mean(table2array(raw_v(:, f_i('Right AC'):f_i('Right AC')+2)), 1, 'omitnan');
+            
+            % Referencial ISB (Antonio)
+            z_isb = (AA - TS) / norm(AA - TS); x_isb = cross(z_isb, AI - AA); x_isb = x_isb / norm(x_isb); y_isb = cross(z_isb, x_isb); y_isb = y_isb / norm(y_isb);
+            R_isb = [x_isb(:), y_isb(:), z_isb(:)];
+            AC_loc = (R_isb' * (AC - AA)')'; AI_loc = (R_isb' * (AI - AA)')';
+            calc.ACx = AC_loc(1); calc.ACy = AC_loc(2); calc.ACz = AC_loc(3);
+            calc.AIz = AI_loc(3);
+            calc.L_AA_TS = norm(AA-TS); calc.L_AA_AI = norm(AA-AI); calc.L_AA_AC = norm(AA-AC);
+            calc.L_TS_AI = norm(TS-AI); calc.L_TS_AC = norm(TS-AC); calc.L_AI_AC = norm(AI-AC);
+
+            % Referencial Meskers
+            idx_stl = find(contains(T_land{:,1}, nome_paciente));
+            PrC_stl = [T_land{idx_stl, 11}, T_land{idx_stl, 12}, T_land{idx_stl, 13}];
+            x_m = -(TS - AC) / norm(TS - AC); v_temp = AI - AC; z_m = -cross(x_m, v_temp); z_m = z_m / norm(z_m); y_m = -cross(x_m, z_m); y_m = y_m / norm(y_m);
+            R_m = [x_m(:), y_m(:), z_m(:)];
+            PrC_loc_m = (R_m' * (PrC_stl - AC)')'; AI_loc_m = (R_m' * (AI - AC)')';
+            calc.PrC_x = PrC_loc_m(1); calc.PrC_y = PrC_loc_m(2); calc.PrC_z = PrC_loc_m(3);
+            calc.AI_x = AI_loc_m(1);
+            calc.Dist_AI_AA = norm(AI-AA); calc.Dist_AA_AC = norm(AA-AC);
+            calc.Dist_PrC_AC = norm(PrC_stl-AC); calc.Dist_TS_PrC = norm(TS-PrC_stl);
+
+            % Guardar linha bruta
+            linha = [];
+            for v = 1:length(vars_mestre)
+                linha(1,v) = calc.(vars_mestre{v});
+            end
+            X_matriz_bruta(end+1, :) = linha;
+            
+            % Guardar Erros (Respostas Y)
+            col = modelo_para_analise;
+            yX(end+1, 1) = (T_mestre.HHC_gt_ISB_X(i) - T_mestre.([col, '_ISB_X'])(i))^2;
+            yY(end+1, 1) = (T_mestre.HHC_gt_ISB_Y(i) - T_mestre.([col, '_ISB_Y'])(i))^2;
+            yZ(end+1, 1) = (T_mestre.HHC_gt_ISB_Z(i) - T_mestre.([col, '_ISB_Z'])(i))^2;
+            
+        catch ME
+            fprintf('Pular %s: %s\n', nome_paciente, ME.message);
+        end
+    end
+end
+
+%% =========================================================
+% 4. ANÁLISE DE SENSIBILIDADE POR EIXO (FILTRADA)
+%% =========================================================
+if isempty(X_matriz_bruta), error('Nenhum dado processado!'); end
+
+% Normalização global de X para manter a escala
+X_norm_total = (X_matriz_bruta - mean(X_matriz_bruta)) ./ std(X_matriz_bruta);
+y_respostas = [yX, yY, yZ];
+equacoes = {eq_X, eq_Y, eq_Z};
+titulos = {'X', 'Y', 'Z'};
+cores = {[0.85 0.33 0.1], [0.47 0.67 0.19], [0 0.45 0.74]};
+
+figure('Color','w','Units','normalized','Position',[0.1 0.2 0.8 0.5]);
+
+for e = 1:3
+    % 1. Extrair quais variáveis pertencem a ESTE eixo
+    tokens_eixo = regexp(equacoes{e}, '(?<!\d)[A-Za-z_][A-Za-z0-9_]*', 'match');
+    vars_eixo = setdiff(unique(tokens_eixo), {'GHx','GHy','GHz'});
+    
+    % 2. Encontrar os índices dessas variáveis na matriz mestra
+    [~, idx_colunas] = ismember(vars_eixo, vars_mestre);
+    
+    % 3. Filtrar dados e normalizar Y para este eixo
+    X_eixo = X_norm_total(:, idx_colunas);
+    y_eixo = (y_respostas(:,e) - mean(y_respostas(:,e))) / std(y_respostas(:,e));
+    
+    % 4. Regressão Linear
+    mdl = fitlm(X_eixo, y_eixo);
+    betas = mdl.Coefficients.Estimate(2:end); % Remove o intercepto
+    
+    % 5. Plotagem com Título Dinâmico (Modelo + Eixo)
+    subplot(1,3,e);
+    bar(betas, 'FaceColor', cores{e});
+    set(gca, 'XTick', 1:length(vars_eixo), 'XTickLabel', vars_eixo);
+    xtickangle(45); grid on;
+    ylabel('Importância (Beta Normalizado)');
+    title(['Erro ', titulos{e}, ' (', modelo_para_analise, ')']);
+    
+    % Mostrar valores em cima das barras
+    text(1:length(betas), betas, num2str(betas, '%.2f'), ...
+        'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 8);
+
+    % 6. Exibir Tabela de Betas no Command Window (Específica para cada eixo)
+    fprintf('\n--- Tabela de Betas: Erro %s (%s) ---\n', titulos{e}, modelo_para_analise);
+    Tabela_Eixo = table(vars_eixo', betas, 'VariableNames', {'Variavel', ['Beta_', titulos{e}]});
+    disp(Tabela_Eixo);
+end
