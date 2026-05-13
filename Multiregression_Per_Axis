@@ -24,12 +24,17 @@ eq_Z = "GHz = -22.5233 + 0.5954*ACx + 0.0600*ACy + 0.1085*AIz + 0.3983*ACz - 0.3
 T_mestre = readtable(ficheiro_resultados);
 T_land = readtable('BNMS_LANDMARKS.xlsx', 'VariableNamingRule', 'preserve');
 
-% Lista mestra para saber o que calcular no loop (todas as vars de todas as eqs)
+% Lista mestra para saber o que calcular no loop
 todas_eqs_unidas = strcat(eq_X, " ", eq_Y, " ", eq_Z);
 tokens_mestre = regexp(todas_eqs_unidas, '(?<!\d)[A-Za-z_][A-Za-z0-9_]*', 'match');
 vars_mestre = setdiff(unique(tokens_mestre), {'GHx','GHy','GHz'});
 
-X_matriz_bruta = []; yX = []; yY = []; yZ = [];
+% --- INICIALIZAÇÃO CRÍTICA PARA EVITAR ERROS ---
+X_matriz_bruta = []; 
+yX = []; 
+yY = []; 
+yZ = [];
+Nomes_Sucesso = {}; 
 
 %% =========================================================
 % 3. LOOP DE RECOLHA DE DADOS
@@ -57,43 +62,57 @@ for i = 1:height(T_mestre)
             raw_v = readtable(path_v, 'Sheet', 'vicon', 'VariableNamingRule', 'preserve');
             h_v = raw_v.Properties.VariableNames;
             f_i = @(str) find(contains(h_v, str, 'IgnoreCase', true), 1);
+            
             AA = mean(table2array(raw_v(:, f_i('posterolateral acromion'):f_i('posterolateral acromion')+2)), 1, 'omitnan');
             TS = mean(table2array(raw_v(:, f_i('trigonum'):f_i('trigonum')+2)), 1, 'omitnan');
             AI = mean(table2array(raw_v(:, f_i('inferior angle'):f_i('inferior angle')+2)), 1, 'omitnan');
             AC = mean(table2array(raw_v(:, f_i('Right AC'):f_i('Right AC')+2)), 1, 'omitnan');
             
             % Referencial ISB (Antonio)
-            z_isb = (AA - TS) / norm(AA - TS); x_isb = cross(z_isb, AI - AA); x_isb = x_isb / norm(x_isb); y_isb = cross(z_isb, x_isb); y_isb = y_isb / norm(y_isb);
+            z_isb = (AA - TS) / norm(AA - TS); 
+            x_isb = cross(z_isb, AI - AA); x_isb = x_isb / norm(x_isb); 
+            y_isb = cross(z_isb, x_isb); y_isb = y_isb / norm(y_isb);
             R_isb = [x_isb(:), y_isb(:), z_isb(:)];
-            AC_loc = (R_isb' * (AC - AA)')'; AI_loc = (R_isb' * (AI - AA)')';
+            AC_loc = (R_isb' * (AC - AA)')'; 
+            AI_loc = (R_isb' * (AI - AA)')';
+            
             calc.ACx = AC_loc(1); calc.ACy = AC_loc(2); calc.ACz = AC_loc(3);
             calc.AIz = AI_loc(3);
             calc.L_AA_TS = norm(AA-TS); calc.L_AA_AI = norm(AA-AI); calc.L_AA_AC = norm(AA-AC);
             calc.L_TS_AI = norm(TS-AI); calc.L_TS_AC = norm(TS-AC); calc.L_AI_AC = norm(AI-AC);
-
+            
             % Referencial Meskers
             idx_stl = find(contains(T_land{:,1}, nome_paciente));
             PrC_stl = [T_land{idx_stl, 11}, T_land{idx_stl, 12}, T_land{idx_stl, 13}];
-            x_m = -(TS - AC) / norm(TS - AC); v_temp = AI - AC; z_m = -cross(x_m, v_temp); z_m = z_m / norm(z_m); y_m = -cross(x_m, z_m); y_m = y_m / norm(y_m);
+            x_m = -(TS - AC) / norm(TS - AC); 
+            v_temp = AI - AC; 
+            z_m = -cross(x_m, v_temp); z_m = z_m / norm(z_m); 
+            y_m = -cross(x_m, z_m); y_m = y_m / norm(y_m);
             R_m = [x_m(:), y_m(:), z_m(:)];
-            PrC_loc_m = (R_m' * (PrC_stl - AC)')'; AI_loc_m = (R_m' * (AI - AC)')';
+            PrC_loc_m = (R_m' * (PrC_stl - AC)')'; 
+            AI_loc_m = (R_m' * (AI - AC)')';
+            
             calc.PrC_x = PrC_loc_m(1); calc.PrC_y = PrC_loc_m(2); calc.PrC_z = PrC_loc_m(3);
             calc.AI_x = AI_loc_m(1);
             calc.Dist_AI_AA = norm(AI-AA); calc.Dist_AA_AC = norm(AA-AC);
             calc.Dist_PrC_AC = norm(PrC_stl-AC); calc.Dist_TS_PrC = norm(TS-PrC_stl);
 
-            % Guardar linha bruta
-            linha = [];
+            % --- GUARDAR DADOS APÓS SUCESSO NOS CÁLCULOS ---
+            linha_atual = zeros(1, length(vars_mestre));
             for v = 1:length(vars_mestre)
-                linha(1,v) = calc.(vars_mestre{v});
+                linha_atual(v) = calc.(vars_mestre{v});
             end
-            X_matriz_bruta(end+1, :) = linha;
             
-            % Guardar Erros (Respostas Y)
+            % Acumular matrizes
+            X_matriz_bruta = [X_matriz_bruta; linha_atual];
+            
             col = modelo_para_analise;
-            yX(end+1, 1) = (T_mestre.HHC_gt_ISB_X(i) - T_mestre.([col, '_ISB_X'])(i))^2;
-            yY(end+1, 1) = (T_mestre.HHC_gt_ISB_Y(i) - T_mestre.([col, '_ISB_Y'])(i))^2;
-            yZ(end+1, 1) = (T_mestre.HHC_gt_ISB_Z(i) - T_mestre.([col, '_ISB_Z'])(i))^2;
+            yX = [yX; (T_mestre.HHC_gt_ISB_X(i) - T_mestre.([col, '_ISB_X'])(i))^2];
+            yY = [yY; (T_mestre.HHC_gt_ISB_Y(i) - T_mestre.([col, '_ISB_Y'])(i))^2];
+            yZ = [yZ; (T_mestre.HHC_gt_ISB_Z(i) - T_mestre.([col, '_ISB_Z'])(i))^2];
+            
+            % Guardar nome apenas se chegou aqui sem erros
+            Nomes_Sucesso{end+1, 1} = nome_paciente;
             
         catch ME
             fprintf('Pular %s: %s\n', nome_paciente, ME.message);
@@ -147,4 +166,29 @@ for e = 1:3
     fprintf('\n--- Tabela de Betas: Erro %s (%s) ---\n', titulos{e}, modelo_para_analise);
     Tabela_Eixo = table(vars_eixo', betas, 'VariableNames', {'Variavel', ['Beta_', titulos{e}]});
     disp(Tabela_Eixo);
+end
+
+%% =========================================================
+% 5. EXPORTAR MATRIZ PARA EXCEL (X, Y, Z SEPARADOS)
+%% =========================================================
+% Verifica se temos dados e se o número de nomes bate com os dados
+if ~isempty(X_matriz_bruta) && length(Nomes_Sucesso) == size(X_matriz_bruta, 1)
+    
+    % Criar a tabela de erros (X, Y, Z individuais)
+    T_Erros = table(Nomes_Sucesso, yX, yY, yZ, ...
+        'VariableNames', {'Paciente', 'Erro_X_sq', 'Erro_Y_sq', 'Erro_Z_sq'});
+    
+    % Criar a tabela com as variáveis calculadas
+    T_Vars = array2table(X_matriz_bruta, 'VariableNames', vars_mestre);
+    
+    % Concatenar e Exportar
+    T_Final = [T_Erros, T_Vars];
+    nome_final = sprintf('Dados_Completos_Eixos_%s.xlsx', modelo_para_analise);
+    writetable(T_Final, nome_final);
+    
+    fprintf('\n--- FICHEIRO EXPORTADO ---\n');
+    fprintf('Gravado como: %s\n', nome_final);
+else
+    fprintf('\n--- AVISO ---\n');
+    fprintf('Não foi possível exportar: ou a matriz está vazia ou houve erro nos nomes.\n');
 end
