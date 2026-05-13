@@ -32,6 +32,7 @@ tokens = regexp(todas_eqs, '(?<!\d)[A-Za-z_][A-Za-z0-9_]*', 'match');
 vars_unicas = sort(setdiff(unique(tokens), {'GHx','GHy','GHz'}));
 
 X_matriz = []; y_final = [];
+Nomes_Sucesso = {};
 
 %% =========================================================
 % 3. LOOP DE RECOLHA DE DADOS
@@ -90,6 +91,7 @@ for i = 1:height(T_mestre)
             
             % --- Resposta Y: Erro Global do Excel ao Quadrado ---
             y_final(end+1, 1) = (T_mestre.(nome_coluna_erro)(i))^2;
+            Nomes_Sucesso{end+1, 1} = nome_paciente;
             
         catch ME
             fprintf('Pular %s: %s\n', nome_paciente, ME.message);
@@ -118,6 +120,8 @@ text(1:length(betas), betas, num2str(betas, '%.2f'), 'VerticalAlignment', 'botto
 % Tabela
 fprintf('\n--- RESULTADOS FINAIS (%s) ---\n', modelo_para_analise);
 disp(table(vars_unicas', betas, 'VariableNames', {'Variavel', 'Beta_Impacto'}));
+
+%{
 
 %% =========================================================
 % 5. GRÁFICOS DE DISPERSÃO (CROSS-CORRELATION)
@@ -156,4 +160,83 @@ for v = 1:num_vars
     text(0.05, 0.90, sprintf('R = %.2f', R), 'Units', 'normalized', 'Color', 'r', 'FontWeight', 'bold');
 end
 
-fprintf('Gráficos de Cross-Correlation gerados com sucesso.\n');
+fprintf('Gráficos de Cross-Correlation gerados com sucesso.\n'); 
+
+%%=========================================================
+% 6. EXPORTAR MATRIZ DE DADOS PARA EXCEL
+%% =========================================================
+ if size(X_matriz, 1) == length(Nomes_Sucesso)
+    % Criar a tabela base com Nomes e Erro
+    T_Export = table(Nomes_Sucesso, y_final, 'VariableNames', {'Paciente', 'Erro_Global_Quadrado'});
+    
+    % Criar tabela com as variáveis
+    T_Vars = array2table(X_matriz, 'VariableNames', vars_unicas);
+    
+    % Juntar tudo
+    T_Final_Export = [T_Export, T_Vars];
+    
+    % Escrever ficheiro
+    nome_ficheiro_xls = sprintf('Matriz_Dados_Sensibilidade_%s.xlsx', modelo_para_analise);
+    writetable(T_Final_Export, nome_ficheiro_xls);
+    
+    fprintf('\n--- FICHEIRO EXPORTADO ---\n');
+    fprintf('Dados guardados em: %s\n', nome_ficheiro_xls);
+else
+    warning('Erro na exportação: O número de nomes não coincide com o número de dados.');
+ end
+%}
+
+%% =========================================================
+% 7. ANÁLISE DE SENSIBILIDADE (Impacto de +20%)
+%% =========================================================
+% 1. Filtrar a variável 'Sex'
+vars_analise = vars_unicas(~strcmpi(vars_unicas, 'Sex'));
+
+% 2. Obter betas e erro base real
+betas_modelo = mdl.Coefficients.Estimate(2:end); 
+erro_medio_quadratico = mean(y_final); % Valor real do Excel para base da %
+
+impacto_absoluto_mm2 = [];
+impacto_percentual = [];
+
+for v = 1:length(vars_analise)
+    nome_var = vars_analise{v};
+    idx_orig = find(strcmpi(vars_unicas, nome_var));
+    
+    % Cálculo do impacto absoluto (mm2)
+    valor_medio = mean(X_matriz(:, idx_orig));
+    vinte_porcento = valor_medio * 0.20;
+    num_desvios_padrao = vinte_porcento / std(X_matriz(:, idx_orig));
+    
+    impacto_bruto = betas_modelo(idx_orig) * num_desvios_padrao;
+    
+    % Guardar ambos os valores
+    impacto_absoluto_mm2(v, 1) = impacto_bruto;
+    impacto_percentual(v, 1) = (impacto_bruto / erro_medio_quadratico) * 100;
+end
+
+% 3. Criar Tabela com as duas colunas
+Tabela_Sensibilidade = table(vars_analise', impacto_absoluto_mm2, impacto_percentual, ...
+    'VariableNames', {'Variavel', 'Impacto_no_Erro_Global_mm2', 'Variacao_Erro_Global_Percentual'});
+
+% Ordenar pelo impacto absoluto
+[~, idx_sort] = sort(abs(Tabela_Sensibilidade.Impacto_no_Erro_Global_mm2), 'descend');
+Tabela_Sensibilidade = Tabela_Sensibilidade(idx_sort, :);
+
+%% =========================================================
+% 8. OUTPUT E EXPORTAÇÃO
+%% =========================================================
+fprintf('\n--- ANÁLISE DE SENSIBILIDADE (Impacto Absoluto vs Percentual) ---\n');
+disp(Tabela_Sensibilidade);
+
+% Gráfico baseado na percentagem
+figure('Color','w');
+bar(Tabela_Sensibilidade.Variacao_Erro_Global_Percentual, 'FaceColor', [0.1 0.5 0.4]);
+set(gca, 'XTick', 1:height(Tabela_Sensibilidade), 'XTickLabel', Tabela_Sensibilidade.Variavel);
+xtickangle(45); grid on;
+ylabel('Impacto no Erro Global (%)');
+title('O que acontece ao erro (%) quando a variável sobe 20%?');
+
+% Exportar
+writetable(Tabela_Sensibilidade, 'Tabela_Sensibilidade_Final_Antonio.xlsx');
+fprintf('Dados exportados para: Tabela_Sensibilidade_Final_Antonio.xlsx\n');
